@@ -1,0 +1,24 @@
+# Secrets
+.env
+!.env.example
+*.lic
+*.lic.b64
+kx-token
+kdb/users.txt
+
+# Python
+__pycache__/
+.venv/
+.pytest_cache/
+
+# Java
+target/
+
+# Node
+node_modules/
+dist/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
