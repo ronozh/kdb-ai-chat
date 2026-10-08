@@ -39,6 +39,9 @@ q:("daily_prices:0#daily_prices";"delete from `daily_prices";"`daily_prices inse
    (`.s.e;"DROP TABLE daily_prices");({.s.e x};"DROP TABLE daily_prices");
    ("{r:.s.e x;r}";"DROP TABLE daily_prices";1000));
 {chk["q blocked: ",-3!x;err[h;x]]}each q;
+chk["HDB file write blocked";err[h;"`:/hdb/2026.09.29/daily_prices/close set 100#0f"]];
+chk["HDB partition write blocked";err[h;".Q.dpft[`:/hdb;2026.10.01;`sym;`daily_prices]"]];
+chk["HDB file read ok (inside working dir)";100=count h"get`:/hdb/2026.09.29/daily_prices/close"];
 chk["lambda row limit blocked";err[h;(sqlCall;"SELECT 1 FROM daily_prices";{system"ls";0})]];
 chk["creds not readable via .sec.creds";err[h;".sec.creds[]"]];
 chk["no hashes in .z.pw (plain lambda, not a projection)";100h=type h".z.pw"];

@@ -1,6 +1,6 @@
 / Expected answers for the section 6 tests, computed directly in q. Run: make kdb-expected
-\l /opt/app/gen_data.q
-t:daily_prices; L:max t`date;
+\l /hdb
+t:select from daily_prices; L:max t`date;   / pull the partitioned table into memory (26k rows)
 -1 "1  close T001 2026.06.15: ",string exec first close from t where sym=`T001,date=2026.06.15;
 -1 "2  MA20 T010 as of ",string[L],": ",string avg -20#exec close from t where sym=`T010;
 m:update pct:100*-1+close%prev close by sym from t;

@@ -1,13 +1,19 @@
 SHELL := /bin/bash
 export QLIC ?= $(HOME)/qlic
 
-.PHONY: kdb kdb-user kdb-down kdb-logs kdb-test kdb-expected mcp mcp-check agent backend backend-down frontend test health
+.PHONY: kdb kdb-hdb kdb-user kdb-down kdb-logs kdb-test kdb-expected mcp mcp-check agent backend backend-down frontend test health
 
 kdb-user:            ## create mcp_ro credentials (kdb/users.txt + mcp-server/.env)
 	kdb/mkuser.sh
 
-kdb:                 ## build and start KDB-X on 127.0.0.1:5000
+kdb-hdb:             ## write the HDB to kdb/hdb (once; delete kdb/hdb to rebuild)
+	mkdir -p kdb/hdb
+	docker compose -f kdb/docker-compose.yml build kdbx
+	docker compose -f kdb/docker-compose.yml run --rm hdb-builder
+
+kdb:                 ## build and start KDB-X on 127.0.0.1:5000 (builds the HDB first if missing)
 	@[ -f kdb/users.txt ] || kdb/mkuser.sh
+	@[ -f kdb/hdb/sym ] || $(MAKE) kdb-hdb
 	docker compose -f kdb/docker-compose.yml up -d --build
 
 kdb-down:

@@ -4,9 +4,10 @@ Natural-language chat over a KDB-X price database. Spec: `doc/plan.md`. Setup: `
 
 **Understand the project** (read in order):
 1. [Architecture and infrastructure](doc/01-architecture.md)
-2. [kdb: the database, q, SQL, pykx](doc/02-kdb.md)
-3. [The agent: Pydantic AI + MCP](doc/03-agent.md)
-4. [MCP and the KDB-X MCP server](doc/04-mcp-server.md)
+2. [kdb: the language, the process, querying, pykx, security](doc/02-kdb.md)
+3. [kdb storage and production architecture: HDB files, memory-mapping, RDB, gateway](doc/03-kdb-storage.md)
+4. [The agent: Pydantic AI + MCP](doc/04-agent.md)
+5. [MCP and the KDB-X MCP server](doc/05-mcp-server.md)
 
 ## Prerequisites
 
@@ -17,7 +18,7 @@ Java, Maven and Tomcat run in Docker. Tested on macOS with Docker Desktop. On Li
 
 ```bash
 git submodule update --init
-make kdb        # KDB-X in Docker, 127.0.0.1:5000 (creates mcp_ro credentials on first run)
+make kdb        # KDB-X in Docker, 127.0.0.1:5000 (first run: creates mcp_ro credentials and builds the HDB in kdb/hdb)
 make mcp        # MCP server, 127.0.0.1:8000 (foreground)
 make agent      # agent, 127.0.0.1:8001 (foreground)
 make backend    # Tomcat 10.1 in Docker, 127.0.0.1:8090
@@ -49,4 +50,5 @@ Tests: `make kdb-test` (security, no LLM). `make test` runs that plus the sectio
   - Every remote query is logged (`docker logs kdbx`).
   - HTTP and websocket handlers are disabled.
 - A heavy SQL self-join once crashed q, so client queries now time out after 30s (`-T 30`).
+- The HDB is mounted read-only into the server. Only the one-off `hdb-builder` container writes it.
 - Arm64: KX ships no `l64arm-sql.zip`. The image takes the arch-independent `s.k_` from `l64-sql.zip`.

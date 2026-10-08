@@ -10,8 +10,20 @@ services:
     volumes:
       - ${QLIC:?set QLIC to your licence dir}:/opt/kx/lic:ro
       - ./init.q:/opt/app/init.q:ro
-      - ./gen_data.q:/opt/app/gen_data.q:ro
+      - ./hdb:/hdb:ro                                  # historical database, read-only for the server
       - ./users.txt:/run/secrets/kdb_users.txt:ro
+    working_dir: /opt/app
     command: ["q", "init.q", "-T", "30", "-w", "2000"]   # -T: abort client queries after 30s; -w: 2GB cap (q aborts, Docker restarts)
     stdin_open: true   # q exits on stdin EOF
     restart: unless-stopped
+
+  # One-off job that writes the HDB (make kdb-hdb). Only this container can write to ./hdb.
+  hdb-builder:
+    image: kdb-ai-chat/kdbx
+    profiles: ["tools"]
+    volumes:
+      - ${QLIC:?set QLIC to your licence dir}:/opt/kx/lic:ro
+      - ./gen_data.q:/opt/app/gen_data.q:ro
+      - ./build_hdb.q:/opt/app/build_hdb.q:ro
+      - ./hdb:/hdb
+    command: ["q", "/opt/app/build_hdb.q", "-q"]

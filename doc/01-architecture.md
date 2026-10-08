@@ -14,7 +14,7 @@ flowchart LR
     T -->|POST /chat| A[Agent<br/>Python, FastAPI + Pydantic AI<br/>:8001]
     A <-->|HTTPS| G[(Gemini LLM<br/>Google cloud)]
     A -->|MCP over HTTP| M[KDB-X MCP server<br/>Python<br/>:8000]
-    M -->|kdb IPC, user mcp_ro| K[(KDB-X<br/>q process<br/>:5000)]
+    M -->|kdb IPC, user mcp_ro| K[(KDB-X HDB<br/>q process + files on disk<br/>:5000)]
 ```
 
 | Component | What it is | Why it exists | Runs in |
@@ -23,7 +23,7 @@ flowchart LR
 | Tomcat API (`backend/`) | Spring Boot WAR on Tomcat 10.1 | Mirrors a corporate app server. It owns user identity (Phase 2: real login) | Docker |
 | Agent (`agent/kdb_agent.py`) | FastAPI app + Pydantic AI agent | Runs the LLM ↔ tool loop and keeps the chat history | Host |
 | MCP server (`mcp-server/`) | KX's open-source server (git submodule, unmodified) | Gives any LLM agent a standard way to query kdb | Host |
-| KDB-X (`kdb/`) | The q/kdb database with simulated prices | Stores and computes the data | Docker |
+| KDB-X (`kdb/`) | q process serving a historical database (HDB): one year of simulated prices, one folder per date | Stores and computes the data | Docker; the data in `kdb/hdb/` is mounted read-only |
 
 ## One question, end to end
 
@@ -75,13 +75,14 @@ Two hops cross the Docker boundary:
 | `agent/.env` | `GOOGLE_API_KEY`, `AGENT_MODEL`, `MCP_URL` | No; `.env.example` is |
 | `mcp-server/.env` | kdb host/port/user/password for the MCP server | No; created by `make kdb-user` |
 | `kdb/users.txt` | `user:salt:sha1(salt+password)` | No; created by `make kdb-user` |
+| `kdb/hdb/` | The database files (about 8 MB) | No; created by `make kdb-hdb` |
 
 ## Start order
 
 Each service needs the one below it, so start from the bottom:
 
 ```bash
-make kdb        # 1. database
+make kdb        # 1. database (builds the HDB files on first run)
 make mcp        # 2. MCP server   (terminal 1)
 make agent      # 3. agent        (terminal 2)
 make backend    # 4. Tomcat
@@ -91,10 +92,11 @@ make health     # checks the whole chain through Tomcat
 
 ## Security in one paragraph
 
-kdb accepts only logged-in users, and the only user, `mcp_ro`, is read-only (see [02-kdb.md](02-kdb.md#7-how-this-project-secures-kdb)). That rule is enforced **in the database**, not in the LLM prompt, so a confused or manipulated LLM still can't change data. The prompt also tells the LLM to refuse writes, but that is a courtesy, not the protection.
+kdb accepts only logged-in users, and the only user, `mcp_ro`, is read-only (see [02-kdb.md](02-kdb.md#8-how-this-project-secures-kdb)). That rule is enforced **in the database**, not in the LLM prompt, so a confused or manipulated LLM still can't change data. The prompt also tells the LLM to refuse writes, but that is a courtesy, not the protection.
 
 ## Where to read next
 
-- [02-kdb.md](02-kdb.md): the database
-- [03-agent.md](03-agent.md): how the agent and Pydantic AI work
-- [04-mcp-server.md](04-mcp-server.md): MCP and the KX server
+- [02-kdb.md](02-kdb.md): kdb, q, how to query it, security
+- [03-kdb-storage.md](03-kdb-storage.md): HDB files on disk, memory-mapping, production RDB/HDB/gateway
+- [04-agent.md](04-agent.md): how the agent and Pydantic AI work
+- [05-mcp-server.md](05-mcp-server.md): MCP and the KX server

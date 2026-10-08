@@ -21,7 +21,7 @@ Three points:
 2. **The LLM knows a tool only from its description.** Before each call it receives each tool's name, its description, and a JSON schema for the arguments. It chooses tools based on that text.
 3. **Memory is just the message list.** Each LLM call is stateless. A "conversation" means sending the earlier messages again every time.
 
-**Pydantic AI** is a Python library that implements this loop: it talks to many LLM providers, describes tools to them, runs the tools and keeps the history. **MCP** (doc 04) is where our tools come from.
+**Pydantic AI** is a Python library that implements this loop: it talks to many LLM providers, describes tools to them, runs the tools and keeps the history. **MCP** ([doc 05](05-mcp-server.md)) is where our tools come from.
 
 ## 2. One question, step by step
 
@@ -83,13 +83,13 @@ MCP_URL = os.getenv("MCP_URL", "http://127.0.0.1:8000/mcp")
 
 `load_dotenv()` runs before the Pydantic AI imports, so `GOOGLE_API_KEY` is already set when the Google provider reads it.
 
-### Instructions (lines 29–47)
+### Instructions (lines 29–50)
 
-`INSTRUCTIONS` holds the rules (always query, never calculate by hand, say when there's no data, refuse writes) plus **SQL dialect notes**. The notes exist because KX SQL lacks features the LLM would otherwise reach for, such as `LAG()`. This is plain prompt engineering: text that steers the model.
+`INSTRUCTIONS` holds the rules (always query, never calculate by hand, say when there's no data, refuse writes) plus **SQL dialect notes**. The notes exist because KX SQL lacks features the LLM would otherwise reach for, such as `LAG()`. This is plain prompt engineering: text that steers the model. Every SQL pattern in it was tested against kdb.
 
 `FALLBACK_SCHEMA` is a hand-written table description, used only if the MCP resources can't be read at startup.
 
-### The agent and its tools (lines 49–57)
+### The agent and its tools (lines 52–60)
 
 ```python
 toolset = MCPToolset(MCP_URL)
@@ -104,7 +104,7 @@ def db_context() -> str:
 
 Note that **no tool is written in this file.** `MCPToolset` asks the MCP server which tools exist and turns each one into a Pydantic AI tool automatically. Add a tool to the MCP server and the agent can use it with no code change here.
 
-### Startup: load schema and SQL guidance (lines 60–80)
+### Startup: load schema and SQL guidance (lines 63–83)
 
 ```python
 async def load_mcp_context():
@@ -123,7 +123,7 @@ async def lifespan(_):                                   # FastAPI runs this onc
 
 MCP servers offer **tools** (actions the LLM can call) and **resources** (documents). We read two resources once and put them in the prompt: the table schema with sample rows, and KX's SQL guide. The LLM therefore knows the column names before it writes its first query.
 
-### The chat endpoint (lines 109–135)
+### The chat endpoint (lines 112–138)
 
 ```python
 @app.post("/chat")
@@ -149,7 +149,7 @@ async def chat(req: ChatRequest):
 - **Retries:** 429 (rate limit) and 503 (overloaded) are temporary, so we retry twice. A daily quota doesn't reset in seconds, so we don't retry it. The total wait stays well under Tomcat's 90s timeout.
 - **History** lives in a Python dict, so it's lost on restart. That's fine for Phase 1.
 
-### Getting the SQL that was run (lines 99–106)
+### Getting the SQL that was run (lines 102–109)
 
 ```python
 def sql_from(messages):
@@ -161,7 +161,7 @@ def sql_from(messages):
 
 The SQL comes from the **tool-call records**, not from the answer text. That's what was really sent to kdb, and it's what the UI shows under "Show SQL".
 
-### Health (lines 138–146)
+### Health (lines 141–149)
 
 `/health` opens an MCP connection and reads the `kdbx://tables` resource. This goes all the way to kdb, so it fails if either the MCP server or kdb is down.
 

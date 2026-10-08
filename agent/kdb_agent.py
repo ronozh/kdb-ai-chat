@@ -40,7 +40,10 @@ KDB-X SQL dialect notes:
 - Not supported: window functions (LAG, OVER), abs(), correlated subqueries in SELECT, inequality conditions in JOIN ... ON.
 - Period return per ticker: SELECT "sym", last("close")/first("close")-1 AS ret FROM daily_prices WHERE ... GROUP BY "sym".
 - N-day moving average as of the latest date: avg over (SELECT "close" ... ORDER BY "date" DESC LIMIT N).
-- Previous trading day (weekdays only): join b."date"=a."date"-1, UNION ALL a Monday join on b."date"=a."date"-3.
+- Weekday: MOD(CAST("date" AS INTEGER), 7) gives 2=Mon .. 6=Fri (0=Sat, 1=Sun).
+- Previous trading day (data has weekdays only): join b."date"=a."date"-1 WHERE weekday<>2,
+  UNION ALL join b."date"=a."date"-3 WHERE weekday=2 (Mondays look back to Friday).
+- Absolute value: CASE WHEN x<0 THEN -x ELSE x END.
 """
 
 FALLBACK_SCHEMA = """Table daily_prices (one row per weekday per ticker):
