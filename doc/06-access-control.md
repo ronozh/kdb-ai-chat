@@ -67,7 +67,7 @@ What the tests cover (`agent/tests/test_access.py`):
 
 | Allowed (group `research`) | Blocked |
 |---|---|
-| Plain SELECT, subqueries, CTEs with `UNION ALL`, joins, `MOD(CAST(...))`, a trailing `;`, upper-case names | Other tables via `FROM`, comma join, `JOIN`, subquery in `WHERE`, `EXISTS`, scalar subquery, `UNION`; a table name used as a column (`SELECT trades …`, `count(quotes)`); `"trades"` quoted; `public.trades`; a comment between tables; CTE shadowing; `information_schema`; two statements; DELETE inside a CTE; DROP / INSERT / UPDATE; unparseable SQL; empty input |
+| Plain SELECT, subqueries, CTEs with `UNION ALL`, joins, `MOD(CAST(...))`, a trailing `;`, upper-case names | Other tables via `FROM`, comma join, `JOIN`, subquery in `WHERE`, `EXISTS`, scalar subquery, `UNION`; a table name used as a column (`SELECT trades …`, `count(quotes)`); the q-escape functions `q(...)`/`qt(...)`; `"trades"` quoted; `public.trades`; a comment between tables; CTE shadowing; `information_schema`; two statements; DELETE inside a CTE; DROP / INSERT / UPDATE; unparseable SQL; empty input |
 
 **Is it 100% safe?** No parser outside the database is. The remaining risk is that sqlglot and KX read some unusual query differently. That risk is contained because:
 1. it fails closed (anything unparseable is blocked),
@@ -165,3 +165,5 @@ In the UI, switch between alice, bob and carol. Ask alice about trades: she gets
 | **A semantic layer** (metrics and dimensions instead of SQL) | The best long-term option for accuracy and row/column rules. More to build. The natural next step if table-level access stops being enough |
 
 Background: kdb+ has no built-in roles or GRANT, only hooks (`.z.pw`, `.z.pg`) for building your own. KX's commercial kdb Insights adds data and row-level entitlements.
+
+For the full analysis of this limitation, the vulnerability it surfaced, and the references, see [07-kdb-access-control-analysis.md](07-kdb-access-control-analysis.md).

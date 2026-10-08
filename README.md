@@ -9,6 +9,7 @@ Natural-language chat over a KDB-X market-data database (daily prices, trades, q
 4. [The agent: Pydantic AI + MCP](doc/04-agent.md)
 5. [MCP and the KDB-X MCP server](doc/05-mcp-server.md)
 6. [Access control: user groups and a SQL allowlist](doc/06-access-control.md)
+7. [Analysis: read-only, table-level access control in kdb+](doc/07-kdb-access-control-analysis.md)
 
 ## Prerequisites
 
@@ -54,10 +55,10 @@ Tests:
 ## Security findings (KDB-X)
 
 - KX SQL (`.s.e`) writes an internal global (`.s.I`), so it fails under both `reval` and `-b`. The plan's fallback (`-b`) does not work, so `-b` is not used.
-- Unrestricted `.s.e` accepts `INSERT`, `CREATE TABLE` and `DROP TABLE`, but not `UPDATE`/`DELETE`, and it cannot call q functions.
+- Unrestricted `.s.e` accepts `INSERT`, `CREATE TABLE`, `DROP TABLE`, and — via KX SQL's `q(...)`/`qt(...)` escapes — **arbitrary q**. It runs outside `reval`, so the SQL path must restrict the SQL text itself (below). See the full analysis in [doc/07-kdb-access-control-analysis.md](doc/07-kdb-access-control-analysis.md).
 - Design (`kdb/init.q`):
   - Every connection is authenticated against a salted SHA-1 credentials file, re-read on each login. kdb fails closed: the port opens only at the end of `init.q`, and q exits if the file can't be read. Anonymous and unknown users are rejected.
-  - The MCP server's exact SQL call runs `.s.e` directly, but only for a single `SELECT`/`WITH` statement: no `;`, no comments, no DML/DDL keywords outside string literals.
+  - The MCP server's exact SQL call runs `.s.e` directly, but only for a single `SELECT`/`WITH` statement: no `;`, no comments, no DML/DDL keywords outside string literals, and no `q(...)`/`qt(...)` q-escape functions (which would otherwise run arbitrary q outside `reval`).
   - Every other remote query runs under `reval`, which blocks writes, `system` and file access outside the working dir. The credentials file is mounted outside the working dir.
   - pykx sends calls as ("fn-as-string";args). These are resolved inside `reval`, like the default handler does.
   - A trailing `;` is stripped. Any other `;` is rejected.
