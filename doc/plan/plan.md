@@ -47,7 +47,7 @@ kdb-ai-chat/
 - Docker Desktop, Node 20+, Python 3.12, `uv`. Java 21, Maven and Tomcat 10.1 run in Docker (no host install needed).
 - KDB-X Community Edition licence file (`kc.lic`) from the KX Developer Center, in a local directory referenced by `QLIC`
 - The same licence is available to the MCP server on the host (it uses pykx), also via `QLIC`
-- A free Gemini API key (`GOOGLE_API_KEY`) from Google AI Studio. See `kdb-ai-chat/doc/setup-licence-and-keys.md` for this and the licence.
+- A free Gemini API key (`GOOGLE_API_KEY`) from Google AI Studio. See `doc/plan/setup-licence-and-keys.md` for this and the licence.
 
 ## 4. Ports and configuration
 
@@ -82,6 +82,7 @@ kdb-ai-chat/
 | `volume` | long   | Random daily volume                         |
 
 - About 26,000 rows, sorted by `date`, `sym`.
+- Stored as a date-partitioned **HDB** on disk (`kdb/hdb/`), written once by `build_hdb.q` and mounted read-only into the server, as in production. An RDB, tickerplant and gateway can be added later (see `doc/03-kdb-storage.md`).
 - Use fictional tickers and names so the data can't be mistaken for real prices.
 
 **Security: read-only service account `mcp_ro`**

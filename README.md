@@ -1,6 +1,6 @@
 # kdb-ai-chat
 
-Natural-language chat over a KDB-X price database. Spec: `doc/plan.md`. Setup: `doc/setup-licence-and-keys.md`.
+Natural-language chat over a KDB-X price database. Spec: `doc/plan/plan.md`. Setup: `doc/plan/setup-licence-and-keys.md`.
 
 **Understand the project** (read in order):
 1. [Architecture and infrastructure](doc/01-architecture.md)
@@ -11,7 +11,7 @@ Natural-language chat over a KDB-X price database. Spec: `doc/plan.md`. Setup: `
 
 ## Prerequisites
 
-Docker Desktop, Node 20+, `uv`, and the KDB-X licence in `~/qlic` plus a Gemini key in `agent/.env` (see `doc/setup-licence-and-keys.md`).
+Docker Desktop, Node 20+, `uv`, and the KDB-X licence in `~/qlic` plus a Gemini key in `agent/.env` (see `doc/plan/setup-licence-and-keys.md`).
 Java, Maven and Tomcat run in Docker. Tested on macOS with Docker Desktop. On Linux, Tomcat needs `extra_hosts: ["host.docker.internal:host-gateway"]` and the agent must listen on an address the container can reach.
 
 ## Run (in order, one terminal each for the foreground ones)
