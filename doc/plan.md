@@ -11,7 +11,7 @@ A web chatbot that answers natural-language questions about stock prices by lett
 ```
 React chat UI  (Vite dev server, :5173)
    │  POST /api/chat           (Vite proxies /api → Tomcat)
-Tomcat Java REST API  (:8080)  — web app backend, owns user identity
+Tomcat Java REST API  (:8090)  — web app backend, owns user identity
    │  POST http://127.0.0.1:8001/chat
 Python agent service  (FastAPI + Pydantic AI, :8001)
    │  MCP streamable-http, loopback  http://127.0.0.1:8000/mcp
@@ -55,9 +55,9 @@ kdb-ai-chat/
 |--------------|------|-----------------------------------------------------------------------------------------------|
 | KDB-X        | 5000 | `QLIC`, credentials file path                                                                 |
 | MCP server   | 8000 | `KDBX_MCP_HOST=127.0.0.1`, `KDBX_MCP_PORT=8000`, `KDBX_DB_HOST=127.0.0.1`, `KDBX_DB_PORT=5000`, `KDBX_DB_USERNAME=mcp_ro`, `KDBX_DB_PASSWORD` |
-| Agent        | 8001 | `GOOGLE_API_KEY`, `AGENT_MODEL` (default `google:gemini-3.8-flash`, free tier; switchable to e.g. `anthropic:claude-haiku-4-5`), `MCP_URL=http://127.0.0.1:8000/mcp` |
-| Tomcat API   | 8080 | `AGENT_URL=http://host.docker.internal:8001` (Tomcat runs in Docker), `AGENT_TIMEOUT_SECONDS=90` |
-| React (dev)  | 5173 | Vite proxy `/api` → `http://127.0.0.1:8080`                                                    |
+| Agent        | 8001 | `GOOGLE_API_KEY`, `AGENT_MODEL` (default `google:gemini-3.5-flash`, free tier; switchable to e.g. `anthropic:claude-haiku-4-5`), `MCP_URL=http://127.0.0.1:8000/mcp` |
+| Tomcat API   | 8090 | `AGENT_URL=http://host.docker.internal:8001` (Tomcat runs in Docker), `AGENT_TIMEOUT_SECONDS=90` |
+| React (dev)  | 5173 | Vite proxy `/api` → `http://127.0.0.1:8090`                                                    |
 
 ---
 
@@ -128,7 +128,7 @@ kdb-ai-chat/
 ### 5.4 Tomcat REST API (Java)
 
 - Spring Boot packaged as a WAR (`SpringBootServletInitializer`), deployed to standalone Tomcat 10.1, to mirror the legacy app server.
-- Build with Maven in a Docker container (`maven:3-eclipse-temurin-21`) and run the official `tomcat:10.1-jdk21` image, published as `127.0.0.1:8080:8080`. Tomcat reaches the host agent via `host.docker.internal:8001`. This is the one hop that leaves loopback inside Docker Desktop's VM, but it stays on the laptop.
+- Build with Maven in a Docker container (`maven:3-eclipse-temurin-21`) and run the official `tomcat:10.1-jdk21` image, published as `127.0.0.1:8090:8080` (8080 is taken on this laptop). Tomcat reaches the host agent via `host.docker.internal:8001`. This is the one hop that leaves loopback inside Docker Desktop's VM, but it stays on the laptop.
 - `POST /api/chat` forwards to the agent's `/chat` using `java.net.http.HttpClient`, with a 90 s timeout.
 - `GET /api/health` reports the backend's own status and the agent's health.
 - User identity: Phase 1 uses a stub. Read the `X-Demo-User` header, defaulting to `demo`, and pass it as `user_id`. Keep this in one class so Phase 2 can replace it with real authentication.

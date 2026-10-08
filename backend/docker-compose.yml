@@ -1,0 +1,11 @@
+services:
+  backend:
+    build: .
+    image: kdb-ai-chat/backend
+    container_name: kdb-backend
+    ports:
+      - "127.0.0.1:8090:8080"
+    environment:
+      AGENT_URL: http://host.docker.internal:8001   # agent runs on the host
+      AGENT_TIMEOUT_SECONDS: "90"
+    restart: unless-stopped

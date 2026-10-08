@@ -26,3 +26,6 @@ dist/
 # MCP server
 mcp-server/.venv/
 mcp-server/*.log
+
+# Logs and build output
+*.log

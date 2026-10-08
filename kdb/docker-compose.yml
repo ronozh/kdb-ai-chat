@@ -12,6 +12,6 @@ services:
       - ./init.q:/opt/app/init.q:ro
       - ./gen_data.q:/opt/app/gen_data.q:ro
       - ./users.txt:/run/secrets/kdb_users.txt:ro
-    command: ["q", "init.q", "-p", "5000"]
+    command: ["q", "init.q", "-p", "5000", "-T", "30"]   # -T: abort client queries after 30s
     stdin_open: true   # q exits on stdin EOF
     restart: unless-stopped
