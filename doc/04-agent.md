@@ -1,6 +1,6 @@
-# 3. The agent: Pydantic AI + MCP
+# 4. The agent: Pydantic AI + MCP
 
-Code: `agent/kdb_agent.py` (about 150 lines).
+Code: `agent/kdb_agent.py` (about 220 lines) and `agent/access.py` (the table check).
 
 ## 1. The big idea: an LLM plus tools plus a loop
 
@@ -63,7 +63,7 @@ ModelResponse  [TextPart("The close of T001 on 2026-06-15 was 523.21.")]
 | Concept | In our code | Meaning |
 |---|---|---|
 | `Agent(model, ...)` | `Agent(AGENT_MODEL, deps_type=Caller, toolsets=[toolset], instructions=INSTRUCTIONS)` | The loop plus its configuration |
-| Model string | `"google:gemini-3.1-flash-lite"` | `provider:model`. Switch to `"anthropic:claude-haiku-4-5"` and nothing else changes |
+| Model string | `"google:gemini-3.5-flash"` (set `AGENT_MODEL` in `agent/.env`) | `provider:model`. Switch to `"anthropic:claude-haiku-4-5"` and nothing else changes |
 | Instructions | `INSTRUCTIONS` + `@agent.instructions def db_context(ctx)` | System-prompt text sent on every call. A decorated function is evaluated on each run, so its text can depend on the caller |
 | Deps | `deps=Caller(user, group, session)` → `ctx.deps` | A value our code passes into a run, readable by instruction functions and tool hooks. The LLM can't change it |
 | Toolset | `MCPToolset(MCP_URL, process_tool_call=guard)` | A group of tools fetched from an MCP server. `process_tool_call` is a hook that runs **before every tool call** |
@@ -110,7 +110,7 @@ async def guard(ctx: RunContext[Caller], call_tool, name, args):
 
 toolset = MCPToolset(MCP_URL, process_tool_call=guard)
 agent = Agent(AGENT_MODEL, deps_type=Caller, toolsets=[toolset], instructions=INSTRUCTIONS)
-sessions: dict[tuple[str, str], list[ModelMessage]] = {}   # (group, session_id) → history
+sessions: dict[tuple[str, str, str], list[ModelMessage]] = {}   # (user, group, session_id) → history
 
 @agent.instructions
 def db_context(ctx: RunContext[Caller]) -> str:
@@ -120,7 +120,7 @@ def db_context(ctx: RunContext[Caller]) -> str:
 - **No tool is written in this file.** `MCPToolset` asks the MCP server which tools exist and turns each one into a Pydantic AI tool automatically.
 - **`guard` sits between the LLM and the MCP server.** The LLM proposes a call; our code decides whether it's made. Only the SQL tool is allowed.
 - **The prompt shows only the group's tables** (`filter_schema`). This is a convenience; `guard` is the protection.
-- **History is keyed by group**, so data one group saw never ends up in another group's prompt.
+- **History is keyed by user, group and session**, so data one user or group saw never ends up in another's prompt.
 
 ### Startup: load the schema and SQL guidance
 
@@ -150,7 +150,7 @@ async def chat(req: ChatRequest, x_agent_token: str = Header(default="")):
     if req.group not in GROUPS:
         raise HTTPException(403, ...)
     caller = Caller(user=req.user_id, group=req.group, session=req.session_id)
-    key = (req.group, req.session_id)
+    key = (req.user_id, req.group, req.session_id)
     for delay in (*RETRY_DELAYS, None):                  # (5, 10, None) → up to 3 attempts
         try:
             result = await agent.run(req.question, message_history=sessions.get(key), deps=caller)
@@ -167,7 +167,7 @@ async def chat(req: ChatRequest, x_agent_token: str = Header(default="")):
 
 - **`agent.run(...)` is the whole loop from section 1.** It connects to the MCP server, calls Gemini, runs tools (through `guard`) and repeats, then returns. Each run opens and closes its own MCP connection, so the agent keeps working if the MCP server restarts.
 - **The group comes from Tomcat, not from the question.** The LLM has no way to change it.
-- **Retries:** 429 (rate limit) and 503 (overloaded) are temporary, so we retry twice. A daily quota doesn't reset in seconds, so we don't retry it. The total wait stays well under Tomcat's 90s timeout. A retry re-runs the whole turn, including its queries.
+- **Retries:** 429 (rate limit) and 503 (overloaded) are temporary, so we retry up to twice (3 attempts). A daily quota doesn't reset in seconds, so we don't retry it. The total wait stays well under Tomcat's 90s timeout. A retry re-runs the whole turn, including its queries.
 - **History** lives in a Python dict, so it's lost on restart. That's fine for a demo.
 
 ### Getting the SQL that was run
@@ -196,7 +196,7 @@ The SQL comes from the **tool-call records**, not from the answer text. It's wha
 | Read-only | kdb (`init.q`, read-only login and mount): enforced in the database |
 | Which group a request runs as | Tomcat (user → group), passed to the agent, never chosen by the LLM |
 | The numbers in the answer | kdb results. The LLM is told to copy them, not compute them |
-| Conversation memory | Our `sessions` dict, keyed by (group, session) |
+| Conversation memory | Our `sessions` dict, keyed by (user, group, session) |
 | Which LLM | `AGENT_MODEL` in `agent/.env` |
 
 ## 6. Try it

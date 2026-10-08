@@ -95,7 +95,7 @@ make agent      # 3. agent        (terminal 1)
 make backend    # 4. Tomcat
 make frontend   # 5. UI           (terminal 2) → http://127.0.0.1:5173
 make health     # checks the whole chain through Tomcat
-make test       # isolation + security tests, no LLM
+make test       # security + access-check tests, no LLM
 ```
 
 ## Security in one paragraph

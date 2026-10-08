@@ -36,6 +36,10 @@ BLOCKED = [  # attempts to reach other tables, write, or confuse the parser
     "DROP TABLE daily_prices",
     "INSERT INTO daily_prices SELECT * FROM daily_prices",
     "UPDATE daily_prices SET \"close\" = 0",
+    "SELECT trades FROM daily_prices LIMIT 1",          # table name used as a column: KX resolves it
+    "SELECT (trades).price AS p FROM daily_prices",
+    "SELECT count(quotes) FROM daily_prices",
+    "SELECT * FROM trades()",
     "SELEC * FRM daily_prices",
     "",
 ]
@@ -49,6 +53,11 @@ def test_allowed(sql):
 @pytest.mark.parametrize("sql", BLOCKED)
 def test_blocked(sql):
     assert violation(sql, PRICES) is not None
+
+
+def test_blocked_reason_names_the_table():
+    assert violation("SELECT count(quotes) FROM daily_prices", PRICES) == "no access to table(s): quotes"
+    assert "trades" in violation("SELECT * FROM trades()", PRICES)
 
 
 def test_group_with_several_tables():

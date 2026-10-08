@@ -17,6 +17,7 @@ GROUPS: dict[str, set[str]] = {
     group: {t.lower() for t in tables}
     for group, tables in yaml.safe_load((Path(__file__).parent / "groups.yaml").read_text()).items()
 }
+KNOWN_TABLES: set[str] = set().union(*GROUPS.values())
 
 # Statements that change anything. kdb rejects writes anyway; this keeps the check self-contained.
 WRITES = (exp.Insert, exp.Update, exp.Delete, exp.Create, exp.Drop, exp.Alter, exp.Merge, exp.Command)
@@ -43,7 +44,11 @@ def violation(sql: str, allowed: set[str]) -> str | None:
     # Belt and braces: every table-like name must be an allowed table or a CTE defined in this query.
     ctes = {cte.alias_or_name for cte in tree.find_all(exp.CTE)}
     named = {t.name for t in tree.find_all(exp.Table)} - ctes
-    denied = sorted({t.lower() for t in real | named} - allowed)
+    # KX also resolves a table name used elsewhere, e.g. as a column (`SELECT trades FROM daily_prices`),
+    # so any identifier or function name that is another group's table is blocked too.
+    mentioned = {i.name.lower() for i in tree.find_all(exp.Identifier)} | \
+                {f.name.lower() for f in tree.find_all(exp.Anonymous)}
+    denied = sorted(({t.lower() or "<unnamed>" for t in real | named} | (mentioned & KNOWN_TABLES)) - allowed)
     if denied:
         return f"no access to table(s): {', '.join(denied)}"
     return None

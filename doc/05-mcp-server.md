@@ -1,4 +1,4 @@
-# 4. MCP and the KDB-X MCP server
+# 5. MCP and the KDB-X MCP server
 
 Code: `mcp-server/kdb-x-mcp-server/` (KX's open-source repo, git submodule pinned to `9c9debc`, not modified).
 

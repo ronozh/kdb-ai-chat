@@ -45,7 +45,7 @@ Tests:
 ## Troubleshooting
 
 - **Model 429 "quota"**: Gemini's free tier allows about 20 requests per day per model, and a question uses 2 or more. Switch `AGENT_MODEL` in `agent/.env` (quotas are per model, e.g. `google:gemini-3.1-flash-lite`), wait a day, or use a paid key (e.g. `anthropic:claude-haiku-4-5` with `ANTHROPIC_API_KEY`).
-- **Model 503 "high demand"**: newer free models are often overloaded. The agent retries 429/503 three times; otherwise switch model.
+- **Model 503 "high demand"**: newer free models are often overloaded. The agent retries 429/503 up to twice (3 attempts); otherwise switch model.
 - **MCP server: "valid q license must be in a known location"**: `QLIC` isn't set. `make` sets it to `~/qlic`.
 - **Port 8080 busy**: Tomcat is published on 8090 because 8080 is used by other local services.
 - **Tomcat 502 with an empty body at the agent**: the Java HttpClient must use HTTP/1.1. Its default h2c upgrade makes uvicorn drop the body.

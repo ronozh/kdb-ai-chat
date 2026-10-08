@@ -40,10 +40,10 @@ flowchart LR
 | **kdb** | Nothing can be **changed** | One read-only login (`mcp_ro`), `reval`, a SELECT-only SQL check, and a read-only HDB mount ([02-kdb.md](02-kdb.md#8-how-this-project-secures-kdb)) |
 | **Agent guard** | A group reads **only its tables** | Every tool call is parsed with sqlglot before it reaches the MCP server |
 | **Agent prompt** | The LLM doesn't **try** other tables | The schema in the prompt lists only the group's tables. This is a convenience, not the protection |
-| **Agent routing** | The group comes from Tomcat, never from the LLM | `deps=Caller(user, group, session)` is set by our code. History is keyed by (group, session) |
+| **Agent routing** | The group comes from Tomcat, never from the LLM | `deps=Caller(user, group, session)` is set by our code. History is keyed by (user, group, session) |
 | **Tomcat + token** | Nobody can skip Tomcat and claim a group | Unknown user → 403. The agent requires `X-Agent-Token` → otherwise 401 |
 
-The `mcp_ro` login can read **every** table, so **the agent is the enforcement point**. In production, only the agent may reach the MCP server, and only the MCP server may reach kdb (network isolation).
+The `mcp_ro` login can read **every** table, so **the agent is the enforcement point**. In production, only the agent may reach the MCP server, and only the MCP server may reach kdb (network isolation). **In this demo that isn't enforced:** the MCP server on `:8000` has no authentication, so any process on the laptop can call it directly and read any table.
 
 ## 4. The check: `agent/access.py`
 
@@ -54,22 +54,25 @@ def violation(sql: str, allowed: set[str]) -> str | None:     # None = may run
     # 2. no INSERT / UPDATE / DELETE / CREATE / DROP … anywhere inside it
     # 3. real tables, resolved per scope (traverse_scope)
     #    + every other table name that isn't a CTE defined in the query
+    #    + any identifier or function name that is a known table (KX resolves `SELECT trades FROM …` too)
     # 4. any table not in `allowed` → "no access to table(s): …"
     # parse or analysis error → blocked (fail closed)
 ```
 
 Why **scope resolution** matters: `WITH trades AS (SELECT * FROM trades) SELECT * FROM trades` defines a CTE called `trades` that reads the real `trades` table. A naive check that ignores names matching a CTE would see no tables and let it through. Resolving each `FROM` to what it really refers to finds the real `trades` table.
 
+Why **identifiers** are checked too: KX resolves a bare name like `trades` to the table even where SQL expects a column, so `SELECT trades FROM daily_prices` or `count(quotes)` would reach another group's table. sqlglot sees those as column names, so the check also blocks any identifier or function name that matches a table outside the group's list. The cost is a harmless false positive: a column alias named like another group's table (`... AS trades`) is blocked too.
+
 What the tests cover (`agent/tests/test_access.py`):
 
 | Allowed (group `research`) | Blocked |
 |---|---|
-| Plain SELECT, subqueries, CTEs with `UNION ALL`, joins, `MOD(CAST(...))`, a trailing `;`, upper-case names | Other tables via `FROM`, comma join, `JOIN`, subquery in `WHERE`, `EXISTS`, scalar subquery, `UNION`; `"trades"` quoted; `public.trades`; a comment between tables; CTE shadowing; `information_schema`; two statements; DELETE inside a CTE; DROP / INSERT / UPDATE; unparseable SQL; empty input |
+| Plain SELECT, subqueries, CTEs with `UNION ALL`, joins, `MOD(CAST(...))`, a trailing `;`, upper-case names | Other tables via `FROM`, comma join, `JOIN`, subquery in `WHERE`, `EXISTS`, scalar subquery, `UNION`; a table name used as a column (`SELECT trades …`, `count(quotes)`); `"trades"` quoted; `public.trades`; a comment between tables; CTE shadowing; `information_schema`; two statements; DELETE inside a CTE; DROP / INSERT / UPDATE; unparseable SQL; empty input |
 
 **Is it 100% safe?** No parser outside the database is. The remaining risk is that sqlglot and KX read some unusual query differently. That risk is contained because:
 1. it fails closed (anything unparseable is blocked),
 2. kdb is read-only, so the worst case is a read, never a write,
-3. the network allows nothing but the agent to reach the MCP server and kdb,
+3. in production, the network allows nothing but the agent to reach the MCP server and kdb (not enforced in this demo),
 4. every attempt is logged.
 
 ## 5. Where the check runs: `guard()` in `agent/kdb_agent.py`
@@ -129,14 +132,14 @@ log = pd.read_json("agent/logs/queries.jsonl", lines=True)
 log[~log.allowed].groupby(["user", "reason"]).size()          # who hit which block
 ```
 
-If the model returns a temporary error (429/503), the agent retries the whole turn, so the same SQL can appear twice for one question. The `session` field groups those entries. kdb also keeps its own audit log of what actually ran (`docker logs kdbx`).
+If the model returns a temporary error (429/503), the agent retries the whole turn, so the same SQL can appear up to 3 times for one question. The `session` field groups those entries. kdb also keeps its own audit log of what actually ran (`docker logs kdbx`).
 
 ## 8. Changing access
 
 | Want to… | Do |
 |---|---|
 | Give a group another table | Edit `agent/groups.yaml`, restart the agent |
-| Add a group | Add it to `groups.yaml`, and map users to it in `backend/.../UserResolver.java` |
+| Add a group | Add it to `groups.yaml`, and map users to it in `backend/.../UserResolver.java` (plus the demo user list in `frontend/src/App.tsx`) |
 | Move a user to another group | `UserResolver.java`, which is where real authentication (SSO) would plug in |
 | Add a table to the database | `kdb/gen_data.q` + `kdb/build_hdb.q`, rebuild; then add it to the groups that should see it |
 

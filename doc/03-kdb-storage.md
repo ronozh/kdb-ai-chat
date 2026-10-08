@@ -128,10 +128,10 @@ date                                        / → all partition dates
 flowchart LR
     G[gen_data.q<br/>3 tables in memory] --> B["build_hdb.q<br/>(hdb-builder container,<br/>writes ./data)"]
     B --> D[(data/hdb/<br/>date folders)]
-    D -->|mounted read-only| S["kdbx server<br/>init.q: \l /db"
+    D -->|mounted read-only| S["kdbx server<br/>init.q: \l /db"]
 ```
 
-- `make kdb-hdb` runs the one-off `hdb-builder` container, which runs `build_hdb.q`. For each table and date, `.Q.dpft[db;date;`sym;`table]` writes the partition: it enumerates symbols against `/hdb/sym`, sorts by `sym`, and applies `p#`.
+- `make kdb-hdb` runs the one-off `hdb-builder` container, which runs `build_hdb.q`. For each table and date, `.Q.dpft[db;date;`sym;`table]` writes the partition: it enumerates symbols against the root `sym` file (`/data/hdb/sym` in the builder), sorts by `sym`, and applies `p#`.
 - `make kdb` builds the HDB first if `kdb/data/hdb` doesn't exist.
 - The server mounts the HDB **read-only**. Only the builder can write, the way a production EOD process is the only writer.
 - To rebuild: `rm -rf kdb/data && make kdb-hdb && make kdb`.
@@ -142,8 +142,8 @@ The HDB stays as it is. You'd add:
 1. A **TP + RDB** (plus a small feed script) with the same table columns, holding today's data.
 2. A **gateway** process. Then point the MCP server at it: `KDBX_DB_PORT` in `mcp-server/.env`.
 3. An **EOD** step: write today with `.Q.dpft` into `data/hdb`, then reload the HDB (`\l /db`).
+4. The same security for every process. Move the security part of `init.q` into a shared `sec.q`.
 
 Table access per user group doesn't change: the agent's check works on table names, wherever the data lives.
-4. The same security for every process. Move the security part of `init.q` into a shared `sec.q`.
 
 The hard part is the gateway: SQL that covers both today and history has to be split and merged.

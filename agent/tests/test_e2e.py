@@ -1,6 +1,6 @@
 """Section 6 end-to-end tests against a running agent (calls the LLM), as group "research".
 
-Expected values come from `make kdb-expected` (kdb/expected.q). Run: make test
+Expected values come from `make kdb-expected` (kdb/expected.q). Run: make test-llm
 """
 
 import os

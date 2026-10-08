@@ -91,7 +91,7 @@ async def guard(ctx: RunContext[Caller], call_tool: CallToolFunc, name: str, arg
 def log_query(caller: Caller, tool: str, sql: str, reason: str | None) -> None:
     """Append one JSON line per tool call, allowed or blocked, for later analysis.
 
-    A model retry (429/503) re-runs the whole turn, so the same SQL can appear twice for one question.
+    A model retry (429/503) re-runs the whole turn, so the same SQL can appear up to 3 times for one question.
     """
     QUERY_LOG.parent.mkdir(parents=True, exist_ok=True)
     entry = {"ts": datetime.now(timezone.utc).isoformat(), "user": caller.user, "group": caller.group,
@@ -105,7 +105,7 @@ def log_query(caller: Caller, tool: str, sql: str, reason: str | None) -> None:
 toolset = MCPToolset(MCP_URL, process_tool_call=guard)
 agent = Agent(AGENT_MODEL, deps_type=Caller, toolsets=[toolset], instructions=INSTRUCTIONS)
 state = {"schema": FALLBACK_SCHEMA, "guidance": ""}      # MCP resources, read once at startup
-sessions: dict[tuple[str, str], list[ModelMessage]] = {}  # (group, session_id) -> history; groups never share history
+sessions: dict[tuple[str, str, str], list[ModelMessage]] = {}  # (user, group, session_id) -> history; never shared
 
 
 @agent.instructions
@@ -180,7 +180,7 @@ async def chat(req: ChatRequest, x_agent_token: str = Header(default="")) -> Cha
     if req.group not in GROUPS:
         raise HTTPException(status_code=403, detail=f"unknown group: {req.group}")
     caller = Caller(user=req.user_id, group=req.group, session=req.session_id)
-    key = (req.group, req.session_id)
+    key = (req.user_id, req.group, req.session_id)
     start = time.perf_counter()
     for delay in (*RETRY_DELAYS, None):
         try:
