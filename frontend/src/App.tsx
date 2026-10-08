@@ -5,7 +5,8 @@ type Message =
   | { role: 'assistant'; text: string; sql: string[]; durationMs: number }
   | { role: 'error'; text: string }
 
-const USERS = ['demo', 'alice', 'bob']
+// Demo users. Tomcat maps each to a read-only data role; the label is only for display.
+const USERS: Record<string, string> = { alice: 'daily prices', bob: 'trades', carol: 'quotes' }
 
 async function ask(sessionId: string, user: string, question: string) {
   const res = await fetch('/api/chat', {
@@ -16,7 +17,7 @@ async function ask(sessionId: string, user: string, question: string) {
   const body = await res.json().catch(() => null)
   if (!res.ok) {
     const reason = body?.error ?? `HTTP ${res.status}`
-    const hint = res.status === 504 ? 'The agent took too long to answer.' : res.status === 502 ? 'The agent or model is unavailable.' : 'Request failed.'
+    const hint = res.status === 504 ? 'The agent took too long to answer.' : res.status === 502 ? 'The agent or model is unavailable.' : res.status === 403 ? 'Not allowed.' : 'Request failed.'
     throw new Error(`${hint} (${reason})`)
   }
   return body as { session_id: string; answer: string; sql: string[]; duration_ms: number }
@@ -24,7 +25,7 @@ async function ask(sessionId: string, user: string, question: string) {
 
 export default function App() {
   const [sessionId, setSessionId] = useState(() => crypto.randomUUID())
-  const [user, setUser] = useState(USERS[0])
+  const [user, setUser] = useState(Object.keys(USERS)[0])
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
@@ -61,15 +62,15 @@ export default function App() {
         <h1>KDB AI Chat</h1>
         <label>
           User{' '}
-          <select value={user} onChange={(e) => setUser(e.target.value)}>
-            {USERS.map((u) => <option key={u}>{u}</option>)}
+          <select value={user} disabled={loading} onChange={(e) => { setUser(e.target.value); newConversation() }}>
+            {Object.entries(USERS).map(([u, data]) => <option key={u} value={u}>{u} ({data})</option>)}
           </select>
         </label>
         <button onClick={newConversation} disabled={loading}>New conversation</button>
       </header>
 
       <main className="messages">
-        {messages.length === 0 && <p className="hint">Ask about simulated prices for tickers T001–T100, e.g. "What was the close of T001 on 2026-06-15?"</p>}
+        {messages.length === 0 && <p className="hint">You are <b>{user}</b> and can only see <b>{USERS[user]}</b> (tickers T001–T100, 2025-10-01 to 2026-09-30).</p>}
         {messages.map((m, i) => (
           <div key={i} className={`msg ${m.role}`}>
             <div className="text">{m.text}</div>

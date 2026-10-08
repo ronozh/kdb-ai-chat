@@ -38,9 +38,13 @@ public class ChatController {
         if (req.question().length() > MAX_QUESTION_LENGTH) {
             return error(HttpStatus.BAD_REQUEST, "question is longer than " + MAX_QUESTION_LENGTH + " characters");
         }
+        var caller = users.resolve(http);
+        if (caller.isEmpty()) {
+            return error(HttpStatus.FORBIDDEN, "unknown user: no data role");
+        }
         String sessionId = req.session_id() == null || req.session_id().isBlank()
                 ? UUID.randomUUID().toString() : req.session_id();
-        return ResponseEntity.ok(agent.chat(sessionId, users.currentUser(http), req.question()));
+        return ResponseEntity.ok(agent.chat(sessionId, caller.get().user(), caller.get().role(), req.question()));
     }
 
     @GetMapping("/health")

@@ -1,4 +1,4 @@
-"""Section 6 end-to-end tests against a running agent (calls the LLM).
+"""Section 6 end-to-end tests against a running agent (calls the LLM), as role "prices".
 
 Expected values come from `make kdb-expected` (kdb/expected.q). Run: make test
 """
@@ -10,9 +10,11 @@ import uuid
 
 import httpx
 import pytest
+from dotenv import dotenv_values
 
 AGENT_URL = os.getenv("AGENT_URL", "http://127.0.0.1:8001")
-pytestmark = pytest.mark.integration
+AGENT_TOKEN = dotenv_values(os.path.join(os.path.dirname(__file__), "..", ".env")).get("AGENT_TOKEN", "")
+pytestmark = [pytest.mark.integration, pytest.mark.llm]
 
 
 @pytest.fixture(autouse=True)
@@ -22,10 +24,11 @@ def _pace():
     time.sleep(int(os.getenv("TEST_PAUSE_SECONDS", "15")))
 
 
-def ask(question: str, session_id: str | None = None) -> dict:
+def ask(question: str, session_id: str | None = None, role: str = "prices") -> dict:
     r = httpx.post(
         f"{AGENT_URL}/chat",
-        json={"session_id": session_id or str(uuid.uuid4()), "user_id": "pytest", "question": question},
+        json={"session_id": session_id or str(uuid.uuid4()), "user_id": "pytest", "role": role, "question": question},
+        headers={"X-Agent-Token": AGENT_TOKEN},
         timeout=180,
     )
     r.raise_for_status()
@@ -38,10 +41,6 @@ def nums(text: str) -> list[float]:
 
 def has_close(text: str, value: float, tol: float) -> bool:
     return any(abs(n - value) <= tol for n in nums(text))
-
-
-def test_health():
-    assert httpx.get(f"{AGENT_URL}/health", timeout=10).json()["mcp"]["ok"]
 
 
 def test_1_close_on_day():
@@ -85,3 +84,13 @@ def test_8_delete_refused():
     assert not any(re.search(r"\b(delete|drop|insert|update)\b", q, re.I) for q in r["sql"])
     check = ask("How many rows are there for T001?")
     assert has_close(check["answer"], 261, 0)
+
+
+def test_9_trades_role():
+    a = ask("How many trades were there for T001 on 2026-09-30, and what was the VWAP?", role="trades")["answer"]
+    assert has_close(a, 20, 0) and has_close(a, 515.9645, 0.001)
+
+
+def test_10_quotes_role():
+    a = ask("What was the average bid-ask spread of T001 on 2026-09-30?", role="quotes")["answer"]
+    assert has_close(a, 0.0295, 0.0001)

@@ -10,4 +10,7 @@ m:update pct:100*-1+close%prev close by sym from t;
 -1 "6  T001 on Saturday 2026.06.13: rows=",string count select from t where sym=`T001,date=2026.06.13;
 -1 "7  T999: rows=",string count select from t where sym=`T999;
 -1 "8  rows for T001 (must stay 261 after delete request): ",string count select from t where sym=`T001;
+x:select from trades where date=2026.09.30, sym=`T001;
+-1 "9  trades T001 2026.09.30: count=",string[count x],", vwap=",string x[`size] wavg x`price;
+-1 "10 quotes T001 2026.09.30: avg spread=",string exec avg ask-bid from select from quotes where date=2026.09.30, sym=`T001;   / exec needs an in-memory table
 exit 0

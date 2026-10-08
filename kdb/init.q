@@ -1,19 +1,25 @@
-/ KDB-X startup: load the HDB, SQL interface, security. Run as: q init.q (the port is opened at the end, only after security is in place)
-/ The HDB is built once by build_hdb.q and mounted read-only at /hdb.
-if[()~key `:/hdb/sym; -2 "fatal: no HDB at /hdb (run: make kdb-hdb)"; exit 1];
-\l /hdb
+/ KDB-X startup for ONE role: load that role's HDB view, SQL interface, security.
+/ Run as: q init.q   with env KDB_ROLE_USER (the only user allowed in) and the role's view mounted read-only at /db.
+/ The port is opened at the end, only after security is in place.
+.sec.user:`$getenv`KDB_ROLE_USER;
+if[null .sec.user; -2 "fatal: KDB_ROLE_USER not set"; exit 1];
+if[not any (key `:/db) like "*_sym"; -2 "fatal: no HDB view at /db (run: make kdb-hdb)"; exit 1];
+\l /db
 .s.init[];
+/ Warm the per-partition row-count cache (.Q.PN). Counting writes it, which reval would block for clients.
+{count value x} each tables[];
 
 / ---- security ----
-/ Credentials file (outside the working dir /hdb, so reval can't read it): user:salt:sha1hex(salt,password).
+/ Credentials file (outside the working dir /db, so reval can't read it): user:salt:sha1hex(salt,password).
 / Re-read on every login, so `make kdb-user` takes effect without a restart and no hashes sit in memory.
 .sec.creds:{{(`$x[;0])!1_'x}":"vs'read0 hsym`$getenv`KDB_USERS_FILE};
 @[.sec.creds;::;{-2 "fatal: cannot read credentials file: ",x; exit 1}];   / fail closed
+/ Only this role's user may log in, even though the file lists every role's user.
 .z.pw:{[u;p] c:@[.sec.creds;::;{()!()}];
-  $[null u;0b;not u in key c;0b;c[u;1]~raze string -33!c[u;0],p]};
+  $[null u;0b;u<>.sec.user;0b;not u in key c;0b;c[u;1]~raze string -33!c[u;0],p]};
 
-/ Read-only. reval blocks writes to globals, system calls and file access outside the working dir (/hdb).
-/ The HDB mount is also read-only, so the files can't change even outside reval.
+/ Read-only. reval blocks writes to globals, system calls and file access outside the working dir (/db).
+/ The HDB view is also mounted read-only, so the files can't change even outside reval.
 / KX SQL (.s.e) writes an internal counter, so it fails under reval and under -b (-b is therefore not used).
 / Exception: the MCP server's exact SQL call runs .s.e directly, only for a single SELECT/WITH statement.
 / (Unrestricted .s.e accepts INSERT/CREATE/DROP; it cannot call q functions.)
@@ -34,7 +40,9 @@ if[()~key `:/hdb/sym; -2 "fatal: no HDB at /hdb (run: make kdb-hdb)"; exit 1];
   q:.sec.trim q; if[not .sec.readOnly q;'"read-only: only a single SELECT/WITH statement is allowed"];
   r:.s.e q; `rowCount`data!(count r;.j.j n sublist r)};
 / audit log: one line per remote query
-.sec.log:{[k;x] -1 " "sv(string .z.p;string .z.u;k;.Q.s1 x);};
+/ wide console so the audit log shows whole queries (q truncates printed values to the console width)
+\c 50 5000
+.sec.log:{[k;x] -1 " "sv(string .z.p;string .z.u;k;-3!x);};
 / like the default handler: a ("fn-as-string";args..) call resolves the string first, all inside reval
 .sec.app:{$[(0h=type x)&10h=type first x;(value first x). 1_x;value x]};
 .z.pg:{.sec.log["sync";x]; $[.sec.isSqlCall x;.sec.sql . 1_x;reval(.sec.app;enlist x)]};
@@ -45,7 +53,7 @@ if[()~key `:/hdb/sym; -2 "fatal: no HDB at /hdb (run: make kdb-hdb)"; exit 1];
 .z.pp:.z.ph;
 .z.ws:{neg[.z.w] "forbidden"};
 
--1 "HDB daily_prices: ",string[count date]," date partitions, ",string[count daily_prices]," rows, ",string[first date]," to ",string last date;
+-1 "role user ",string[.sec.user],"; tables ",(", "sv string tables[]),"; ",string[count date]," dates ",string[first date]," to ",string last date;
 
 / open the port last: if anything above failed, nothing is exposed
 \p 5000

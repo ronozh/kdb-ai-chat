@@ -33,14 +33,20 @@ public class AgentClient {
     }
 
     private final String baseUrl;
+    private final String token;
     private final Duration timeout;
     private final ObjectMapper mapper;
     private final HttpClient http;
 
     public AgentClient(@Value("${agent.url}") String baseUrl,
+                       @Value("${agent.token}") String token,
                        @Value("${agent.timeout-seconds}") long timeoutSeconds,
                        ObjectMapper mapper) {
+        if (token.isBlank()) {
+            throw new IllegalStateException("AGENT_TOKEN is not set (run: make secrets)");
+        }
         this.baseUrl = baseUrl.replaceAll("/+$", "");
+        this.token = token;
         this.timeout = Duration.ofSeconds(timeoutSeconds);
         this.mapper = mapper;
         // HTTP/1.1: the default h2c upgrade makes uvicorn drop the request body
@@ -48,11 +54,12 @@ public class AgentClient {
                 .connectTimeout(Duration.ofSeconds(5)).build();
     }
 
-    public JsonNode chat(String sessionId, String userId, String question) {
-        Map<String, String> body = Map.of("session_id", sessionId, "user_id", userId, "question", question);
+    public JsonNode chat(String sessionId, String userId, String role, String question) {
+        Map<String, String> body = Map.of("session_id", sessionId, "user_id", userId, "role", role, "question", question);
         return send(HttpRequest.newBuilder(URI.create(baseUrl + "/chat"))
                 .timeout(timeout)
                 .header("Content-Type", "application/json")
+                .header("X-Agent-Token", token)
                 .POST(HttpRequest.BodyPublishers.ofString(write(body)))
                 .build());
     }

@@ -16,3 +16,18 @@ daily_prices:{[]
   vols:100000+(100*n)?5000000;
   `date`sym xasc ([] date:raze 100#enlist dates; sym:raze n#'syms; name:raze n#'names; close:raze closes; volume:vols)
   }[];
+
+/ Intraday trades and quotes around each day's close (generated after daily_prices, so its values are unchanged).
+randn:{[k] sqrt[-2*log 1-k?1f]*cos 2*acos[-1]*k?1f};
+intraday:{[k] i:where count[daily_prices]#k;      / each daily row repeated k times
+  ([] date:daily_prices[`date] i; sym:daily_prices[`sym] i; ref:daily_prices[`close] i;
+      time:09:30:00.000+`time$(count i)?23400000)};   / random time in 09:30-16:00
+
+trades:`date`sym`time xasc select date, sym, time,
+  price:0.01*floor 0.5+100*ref*1+0.005*randn count i,
+  size:100*1+(count i)?50 from intraday 20;
+
+quotes:`date`sym`time xasc select date, sym, time, bid, ask:bid+spread, bsize, asize from
+  update bid:0.01*floor 100*(ref*1+0.005*randn count i)-spread%2 from
+  update spread:0.01*1+(count i)?5, bsize:100*1+(count i)?20, asize:100*1+(count i)?20 from intraday 40;
+delete ref from `trades; delete ref from `quotes;
