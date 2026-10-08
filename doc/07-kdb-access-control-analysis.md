@@ -3,17 +3,97 @@
 A deeper look at *why* our access control sits in the agent, what kdb+ can and can't do natively, the
 vulnerability this surfaced, and the alternatives. Written for a reader new to kdb+. Design: [06-access-control.md](06-access-control.md).
 
-## 1. Terms and background
+## 1. Concepts primer (for a kdb newcomer)
 
-- **kdb+ / KDB-X** — a column-oriented database. Its language is **q**. A running database is a **q process** ([02-kdb.md](02-kdb.md)).
-- **q** — the language. Crucially, q can evaluate text as code at runtime (`value "a:1"` creates variable `a`), and `select`/`update`/`delete` are ordinary q verbs.
-- **IPC / handle** — a client connects over TCP and sends a message. The server runs it and returns the result. There is no fixed "query protocol"; a message is q to be evaluated.
-- **`.z.*` handlers** — callbacks q runs on events. The security-relevant ones:
-  - `.z.pw[user;password]` — on login; return `0b` to reject.
-  - `.z.pg[x]` / `.z.ps[x]` — on a synchronous / asynchronous message; `x` is what the client sent. The default is `value x` (run it). **This is the single choke point for every query.**
-- **`reval`** — "restricted evaluation": run something as if the command-line flags `-u 1` and `-b` were set. It blocks writes to globals, writes to the filesystem, state-changing system calls, `exit`, and `hopen` of a file. It is kdb's building block for a read-only sandbox ([reference](https://code.kx.com/q/ref/eval/)).
-- **`-b`, `-u`, `-U`** — command-line flags: `-b` makes clients read-only; `-u`/`-U` set a password file; `-u` also confines file access to the start directory.
-- **SQL in KDB-X (`.s.e`)** — KX ships an ANSI-SQL layer that **translates SQL into q at runtime** and runs it. We use it because LLMs write SQL well.
+Before the analysis, the pieces that keep coming up. The one mental model to hold onto:
+
+> **In kdb+, a client doesn't send a "query" to a query engine. It sends a message that the server
+> *evaluates as code*. Security is therefore not a database setting — it is whatever the server's
+> handler function decides to do with that code.**
+
+### The running database is a q process
+
+**kdb+** (new name **KDB-X**) is a column database; its language is **q**. A live database is just a
+running `q` program — a **q process** — listening on a TCP port ([02-kdb.md](02-kdb.md)). Its tables are
+variables in that process. There is no separate "server daemon" with its own permission system.
+
+### q evaluates text as code
+
+q can turn text into running code at any time. `value "a:1"` creates a variable `a` set to 1.
+`select`, `update`, `delete`, reading a file, launching a shell command — all are ordinary q expressions,
+not privileged operations gated by the database. This is powerful and is exactly why access control is hard.
+
+### IPC and handles
+
+A client connects over TCP and **opens a handle** (an integer). Sending a string on that handle asks the
+server to **evaluate that string** and return the result:
+
+```q
+h:hopen `::5000           / connect
+h "count daily_prices"    / server evaluates this q, returns a number
+```
+
+There is no fixed "query protocol". A message is just q (or, for us, a small wrapper that runs SQL). So
+"what is this client allowed to do?" is decided entirely by the server-side handler that receives the message.
+
+### `.z.*` handlers — the hooks you override
+
+q calls certain functions automatically on events. You redefine them to add security. The ones here:
+
+| Handler | Fires when… | Default behaviour | We use it to… |
+|---|---|---|---|
+| `.z.pw[user;pwd]` | a client logs in | accept | check the password; return `0b` to reject |
+| `.z.pg[x]` | a **sync** message `x` arrives | `value x` (run it) | decide what runs, and how (sandbox or SQL-check) |
+| `.z.ps[x]` | an **async** message `x` arrives | `value x` | same, always sandboxed |
+| `.z.ph` / `.z.pp` / `.z.ws` | HTTP / websocket request | serve it | refuse (we disable these) |
+
+`.z.pg` is **the single choke point**: every synchronous client query passes through it. If `.z.pg` just
+did `value x` (the default), any client could run any q. Our `.z.pg` instead sandboxes or restricts the message.
+
+### `-b` — the process-wide read-only switch
+
+A command-line flag. `q … -b` makes **every** client connection read-only: clients can't amend data.
+It's all-or-nothing for the whole process and not tied to any username. We **don't** use it, because it also
+blocks the internal write that KX's SQL engine needs (see `.s.e` below), which would break SQL entirely.
+
+### `-u` / `-U` — the password file (and file confinement)
+
+`-U file` loads a `user:password` file (the built-in login). `-u file` does the same **and** confines file
+access to the start directory and below. KX recommends real directory services (LDAP/Kerberos) for
+production; the built-in file is development-grade. We implement login in `.z.pw` instead, so we can salt and
+hash and re-read the file per login.
+
+### `reval` — restricted (read-only) evaluation
+
+`reval x` runs the parse tree `x` **as if `-b` and `-u 1` were active**. Concretely it blocks: writes to
+global variables, writes to the filesystem, state-changing system calls (e.g. launching a shell), `exit`,
+and opening a file handle ([reference](https://code.kx.com/q/ref/eval/)). It's an **opt-in sandbox you wrap
+around one evaluation** — not an account setting. Our `.z.pg` runs ordinary client q as `reval(…)`, which is
+what actually makes those queries read-only.
+
+```q
+reval parse "a:1"      / 'noupdate  — blocked: can't create/amend a global
+reval parse "count daily_prices"   / fine — a read
+```
+
+### `.s.e` — the SQL interface
+
+KX ships an ANSI-SQL layer. `.s.e "SELECT …"` **translates the SQL into q at runtime and runs it**. We use it
+because LLMs write SQL well. Two consequences matter for security:
+1. `.s.e` itself writes to an internal counter as it runs, so it **cannot run inside `reval`** (reval would
+   block that write). We therefore run it **outside** the sandbox and restrict the SQL *text* instead.
+2. KX SQL has escape functions — `q(…)`, `qt(…)`, `.s.F` — that run **arbitrary q from inside a SELECT**.
+   Combined with (1), that is the vulnerability in §3.
+
+### Putting it together: is `mcp_ro` a "read-only account"?
+
+**No — there is no such thing in kdb+.** `mcp_ro` is only a label in the password file. Nothing in kdb ties
+that name to "may not write". The account is read-only *only because* our `.z.pg`:
+- runs q messages through `reval` (sandboxed), and
+- lets the SQL path run `.s.e` only after the SQL text passes our checks.
+
+If a path reaches `.s.e` outside `reval` with q smuggled inside it, **kdb will happily write** — the "read-only
+account" never promised otherwise. That is precisely what §3 is about.
 
 ## 2. The core limitation
 
@@ -60,11 +140,43 @@ KX SQL has escape hatches that **evaluate arbitrary q from inside a SELECT** ([S
 
 So a query that is syntactically a read-only `SELECT` can carry q code in a `qt(...)`/`q(...)` call. Because `.s.e` runs outside `reval`, that q code runs with the process's full rights — **even though `mcp_ro` is a "read-only" account.** "Read-only" was enforced by `reval` and by text rules that only looked for SQL keywords like `INSERT`; neither covers q smuggled inside `qt(...)`.
 
-### Benign proof
+### Why "the account is read-only, so kdb should block the write" is wrong
 
-On a throwaway test I confirmed, using only harmless probes on my own machine, that a `SELECT` from the `mcp_ro` account could **create a global variable** — a write — through `qt(...)`. In shorthand, the `qt(...)` argument was a tiny q table expression that, as a side effect, set a dummy global `zzprobe`. Before the fix the variable appeared; the account was supposedly read-only, so that should have been impossible. The same mechanism could read files the process can read or run shell commands — I did not exercise those beyond confirming the class of problem, and I'm not publishing payloads.
+This is the natural objection, and the answer is the §1 mental model: kdb has no read-only *account*. A write
+is blocked only when it runs **inside `reval`**. Our q path uses `reval`, so q writes are blocked. The SQL
+path runs `.s.e` **outside** `reval` (it has to), so on that path *nothing* was watching for a write except a
+text check for keywords like `INSERT`. `qt('… update … ')` contains no such keyword at the top level — the
+write is q hidden inside the escape — so it sailed through and kdb executed it. kdb wasn't bypassed; it was
+never told to stop writes on that path.
 
-Our earlier test suite missed this because it only tried **plain q function names** (`system`, `value`), which KX SQL rejects — it did not try KX's own `q(...)`/`qt(...)` wrappers.
+### Proof: a read-only account changing a table value
+
+Confirmed on a **throwaway** q process (an in-memory copy, no security layer — *not* the real server). The
+SQL below looks like a read (`SELECT … FROM qt(…)`), but its `qt(...)` argument contains q that updates the
+table as a side effect:
+
+```q
+.s.init[];
+daily_prices:([] sym:`T001`T002; close:10 20f);
+show select from daily_prices where sym=`T001;    / close=10
+/ a "SELECT" whose qt(...) argument runs:  update close:999f from daily_prices where sym=`T001
+.s.e "SELECT * FROM qt('([]d:enlist `$string .[`daily_prices;();:;update close:999f from daily_prices where sym=`T001])')";
+show select from daily_prices where sym=`T001;    / close=999  <- written by a "read-only" session
+.[`daily_prices;();:;update close:10f from daily_prices where sym=`T001];   / restore
+```
+
+Observed: `10` → `999` → `10`. The reusable mechanism is "wrap a q write inside `qt('…')`"; the outer SQL is
+only there to look like a SELECT. The same q could read a readable file or run a shell command.
+
+Our earlier test suite missed this because it only tried **plain q function names** (`system`, `value`), which
+KX SQL rejects — it did not try KX's own `q(...)`/`qt(...)` wrappers.
+
+### A note on the *real* server
+
+On the live server `daily_prices` is loaded from an **OS read-only mount** (`./data/hdb:/db:ro`), so the files
+on disk can't change regardless. But the escape could still corrupt the **in-memory** copy other users see
+until restart, create globals, read any file the process can read, or run shell commands. The read-only mount
+protects stored data, not the process — which is why the escape itself must be blocked.
 
 ### The fix (committed)
 
@@ -75,6 +187,48 @@ Defence in depth, blocking the escape **before** `.s.e`:
 4. **Regression tests** (benign probes) in `kdb/test_security.q` and `agent/tests/test_access.py`.
 
 The broader lesson, and KX's own: **a text/parse check over free-form SQL is a hardening layer, not a guarantee.** The guarantees are process-level read-only (`reval`) and process-level table scope (loading only some tables). That is exactly why the strongest option (§4) is physical separation.
+
+### Try it yourself
+
+**A. See the escape BLOCKED on the real (fixed) server.** Open a client session:
+
+```bash
+docker exec -it --env-file mcp-server/.env kdbx q
+```
+
+Paste (this sends the SQL exactly as the MCP server would):
+
+```q
+h:hopen `$"::5000:mcp_ro:",getenv`KDBX_DB_PASSWORD
+sqlCall:"{r:.s.e x;`rowCount`data!(count r;.j.j y sublist r)}"
+h(sqlCall;"SELECT * FROM qt('([]x:enlist `zzprobe set 1)')";10)   / tries to create a global via qt()
+h"zzprobe"                                                        / was it written?
+```
+
+Expected: the call raises `'q-escape functions (q/qt) are not allowed`, and `h"zzprobe"` raises `'zzprobe`
+(no global created). A normal read like `h(sqlCall;"SELECT \"close\" FROM daily_prices WHERE \"sym\"='T001' LIMIT 1";10)` still works.
+
+**B. See the write SUCCEED on a throwaway (unfixed, in-memory copy — never the real server).** Save this as
+`write-demo.q`:
+
+```q
+.s.init[];
+daily_prices:([] sym:`T001`T002; close:10 20f);
+show select from daily_prices where sym=`T001;    / close=10
+.s.e "SELECT * FROM qt('([]d:enlist `$string .[`daily_prices;();:;update close:999f from daily_prices where sym=`T001])')";
+show select from daily_prices where sym=`T001;    / close=999  <- written from a "read-only" session
+.[`daily_prices;();:;update close:10f from daily_prices where sym=`T001];   / restore
+show select from daily_prices where sym=`T001;    / close=10
+```
+
+Run it in a throwaway container (it never touches the real server or the HDB files):
+
+```bash
+docker run --rm -v ~/qlic:/opt/kx/lic:ro -v "$PWD/write-demo.q:/t.q:ro" kdb-ai-chat/kdbx q /t.q -q
+```
+
+This is the whole point in one screen: the same `qt('…')` wrapper that A blocks is, without the block, a
+working write from a "read-only" session.
 
 ## 4. Options for our use case (≤5 fixed groups, read-only, strong table access, operational simplicity)
 

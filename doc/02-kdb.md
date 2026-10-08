@@ -152,6 +152,8 @@ Results come back as pykx objects that wrap q data. Call `.pd()` for pandas or `
 
 All the code is in `kdb/init.q`. q lets you override **callback hooks** that run on every connection or query:
 
+> New to kdb? [07-kdb-access-control-analysis.md §1](07-kdb-access-control-analysis.md#1-concepts-primer-for-a-kdb-newcomer) explains `.z.pg`, `reval`, `-b`, `.s.e` and why there is no "read-only account" from first principles.
+
 ```mermaid
 flowchart TD
     C[client connects] --> PW{".z.pw<br/>user + password ok?"}
