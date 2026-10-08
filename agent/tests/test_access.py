@@ -40,6 +40,9 @@ BLOCKED = [  # attempts to reach other tables, write, or confuse the parser
     "SELECT (trades).price AS p FROM daily_prices",
     "SELECT count(quotes) FROM daily_prices",
     "SELECT * FROM trades()",
+    "SELECT * FROM qt('([]a:1 2)')",                   # KX q-escape: run a q table expression
+    "SELECT q('J','count',\"close\") FROM daily_prices",  # KX q-escape: run a q expression
+    "SELECT * FROM QT('([]a:1 2)')",                   # case-insensitive
     "SELEC * FRM daily_prices",
     "",
 ]

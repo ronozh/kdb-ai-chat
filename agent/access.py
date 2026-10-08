@@ -22,6 +22,10 @@ KNOWN_TABLES: set[str] = set().union(*GROUPS.values())
 # Statements that change anything. kdb rejects writes anyway; this keeps the check self-contained.
 WRITES = (exp.Insert, exp.Update, exp.Delete, exp.Create, exp.Drop, exp.Alter, exp.Merge, exp.Command)
 
+# KX SQL escapes that evaluate arbitrary q: q(...) runs a q expression, qt(...) a q table expression.
+# kdb blocks these authoritatively via its own parse tree; this is the matching second layer in the agent.
+Q_ESCAPES = {"q", "qt"}
+
 
 def violation(sql: str, allowed: set[str]) -> str | None:
     """Why this SQL must be blocked for a group allowed to read `allowed`, or None if it may run."""
@@ -34,6 +38,8 @@ def violation(sql: str, allowed: set[str]) -> str | None:
     tree = statements[0]
     if tree.find(*WRITES):
         return "only read queries are allowed"
+    if {f.name.lower() for f in tree.find_all(exp.Anonymous)} & Q_ESCAPES:
+        return "q-escape functions (q/qt) are not allowed"
     try:
         # Tables each FROM/JOIN really reads, resolved per scope: a CTE named `trades` is not the table,
         # but `WITH trades AS (SELECT * FROM trades)` still reads the real `trades` inside the CTE.

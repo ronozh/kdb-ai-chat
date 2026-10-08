@@ -45,6 +45,11 @@ q:(T each ("TBL:0#TBL";"delete from `TBL";"`TBL insert first TBL";"zz:1";"system
 {chk["q blocked: ",-3!x;err[h;x]]}each q;
 chk["own file read ok (inside working dir)";0<count h T"get`:2026.09.29/TBL/.d"];
 chk["lambda row limit blocked";err[h;(sqlCall;T"SELECT 1 FROM TBL";{system"ls";0})]];
+/ KX SQL q-escapes must never reach .s.e (they run arbitrary q outside reval). Benign probes.
+chk["SQL q-escape qt() blocked";err[sql;"SELECT * FROM qt('([]a:1 2)')"]];
+chk["SQL q-escape q() blocked";err[sql;"SELECT q('J';'count';\"sym\") FROM TBL"]];
+chk["SQL q-escape set no global";err[sql;"SELECT * FROM qt('([]x:enlist `zzprobe set 1)')"]];
+chk["no zzprobe global written";err[h;"zzprobe"]];
 chk["creds not readable via .sec.creds";err[h;".sec.creds[]"]];
 chk["no hashes in .z.pw (plain lambda, not a projection)";100h=type h".z.pw"];
 chk["data unchanged";n0=h T"count TBL"];

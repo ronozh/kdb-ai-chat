@@ -21,8 +21,9 @@ if[()~key `:/db/sym; -2 "fatal: no HDB at /db (run: make kdb-hdb)"; exit 1];
 / Read-only. reval blocks writes to globals, system calls and file access outside the working dir (/db).
 / The HDB view is also mounted read-only, so the files can't change even outside reval.
 / KX SQL (.s.e) writes an internal counter, so it fails under reval and under -b (-b is therefore not used).
-/ Exception: the MCP server's exact SQL call runs .s.e directly, only for a single SELECT/WITH statement.
-/ (Unrestricted .s.e accepts INSERT/CREATE/DROP; it cannot call q functions.)
+/ Exception: the MCP server's exact SQL call runs .s.e directly, only for a single SELECT/WITH statement
+/ whose KX parse tree contains no q-escape function. .s.e runs OUTSIDE reval (it needs to write an internal
+/ counter), so without this a crafted SELECT could use KX SQL's q(...) / qt(...) escapes to run arbitrary q.
 .sec.sqlCall:"{r:.s.e x;`rowCount`data!(count r;.j.j y sublist r)}";
 .sec.isSqlCall:{$[0h<>type x;0b;3<>count x;0b;.sec.sqlCall~x 0]};
 / drop '...' literals and "..." identifiers in one left-to-right pass (state = open quote char, or " ")
@@ -36,8 +37,19 @@ if[()~key `:/db/sym; -2 "fatal: no HDB at /db (run: make kdb-hdb)"; exit 1];
     any w in ("INSERT";"UPDATE";"DELETE";"CREATE";"DROP";"ALTER";"TRUNCATE";"INTO";"MERGE";"REPLACE";"UPSERT";"GRANT");0b;
     1b]};
 .sec.trim:{[q] $[10h<>type q;q;{(neg sum mins reverse x in " \t\r\n;")_x}trim q]};   / drop trailing ;
+/ Function names called in the SQL: an identifier run immediately before '(' (spaces before '(' ignored).
+/ Works on unquoted text, so string literals can't hide a call. Distinguishes the q(...)/qt(...) escapes
+/ from a table alias `q` or a qualified column q."date" (neither is followed by '(').
+.sec.idc:{x in .Q.A,"0123456789_"};
+.sec.fnames:{[sql]
+  u:upper .sec.unquote sql;
+  u:u where not (u=" ")&next[u]="(";
+  back:{[u;p] n:0; while[(p>n)&.sec.idc u (p-1)-n; n+:1]; `$u[(p-n)+til n]};
+  distinct back[u] each where u="("};
+.sec.qEscape:`Q`QT;   / KX SQL functions that evaluate q; must never reach .s.e (they run outside reval)
 .sec.sql:{[q;n] if[not (type n) in -5 -6 -7h;'"bad row limit"];   / n reaches sublist unrestricted
   q:.sec.trim q; if[not .sec.readOnly q;'"read-only: only a single SELECT/WITH statement is allowed"];
+  if[any .sec.qEscape in .sec.fnames q;'"q-escape functions (q/qt) are not allowed"];
   r:.s.e q; `rowCount`data!(count r;.j.j n sublist r)};
 / audit log: one line per remote query
 / wide console so the audit log shows whole queries (q truncates printed values to the console width)
