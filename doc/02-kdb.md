@@ -35,7 +35,7 @@ q comes from **APL** and **k**: it's terse, it works on whole arrays, and it **r
 
 ## 3. The q process
 
-A **q process** is one running `q` program: a single-threaded interpreter that holds data and can listen on a port. Every kdb component is a q process running a different script; doc 03 has examples. We run **three**, one per role: containers `kdb-prices`, `kdb-trades` and `kdb-quotes` each run `q init.q` and load only their role's table ([06-roles.md](06-roles.md)).
+A **q process** is one running `q` program: a single-threaded interpreter that holds data and can listen on a port. Every kdb component is a q process running a different script; doc 03 has examples. Our `kdbx` container runs **one** q process: `q init.q`, which loads the HDB with all three tables (see [section 8](#8-how-this-project-secures-kdb)).
 
 **System commands** are lines that start with `\`. They are REPL commands, not q functions:
 
@@ -75,23 +75,22 @@ make kdb-admin        # new q process in a throwaway container, loads all 3 tabl
 
 This gives you unrestricted q on the same files, with all three tables. The HDB is mounted **read-only** and the container has no network port, so you can't damage or expose anything. It's the best place to learn q and to read files with `get` (doc 03).
 
-### b) Client session: query a role's server as that role
+### b) Client session: query the real server as `mcp_ro`
 
 ```bash
-docker exec -it --env-file mcp-server/.env.prices kdb-prices q
+docker exec -it --env-file mcp-server/.env kdbx q
 ```
 
 ```q
-h:hopen `$"::5000:ro_prices:",getenv`KDBX_DB_PASSWORD   / open a connection handle (port 5000 inside the container)
-h"tables[]"                                            / → ,`daily_prices  (only this role's table)
-h"count daily_prices"                                  / send q code as a string, get the result back
+h:hopen `$"::5000:mcp_ro:",getenv`KDBX_DB_PASSWORD   / open a connection handle
+h"tables[]"                                         / → `daily_prices`quotes`trades
+h"count daily_prices"                               / send q code as a string, get the result back
 h"select from daily_prices where date=2026.06.15, sym=`T001"
-h"count trades"                                        / → error: trades doesn't exist in this process
-h"delete from `daily_prices"                            / → 'noupdate  (read-only)
+h"delete from `daily_prices"                         / → 'noupdate  (read-only)
 hclose h
 ```
 
-For bob's or carol's role, use `kdb-trades` / `.env.trades` / `ro_trades`, and so on.
+`mcp_ro` can read every table. Which tables each user group may query is enforced in the agent ([06-access-control.md](06-access-control.md)).
 
 `h` is a **connection handle** (an integer). Calling it with a string runs that string on the server. Every kdb client works this way, including pykx and the MCP server.
 
@@ -101,7 +100,7 @@ Prefix these with `h` in a client session:
 
 | Want to… | Command | Notes |
 |---|---|---|
-| List tables | `tables[]` | Admin: `` `daily_prices`quotes`trades ``; a role: only its table |
+| List tables | `tables[]` | → `` `daily_prices`quotes`trades `` |
 | Show the schema | `meta daily_prices` | `c` column, `t` type (`d` date, `s` symbol, `f` float, `j` long), `a` attribute (`p` = parted) |
 | List dates (HDB) | `date` | In an HDB, `date` is a variable listing every partition |
 | Count rows | `count daily_prices` | |
@@ -116,8 +115,8 @@ Shortcuts:
 
 ```bash
 make kdb-expected         # test answers computed in q (kdb/expected.q)
-make kdb-test             # security + isolation tests, per role
-docker logs kdb-prices    # audit log: every remote query with user, time and full text
+make kdb-test             # auth + read-only tests
+docker logs kdbx          # audit log: every remote query with user, time and full text
 ```
 
 ## 7. pykx: q from Python
@@ -127,15 +126,15 @@ docker logs kdb-prices    # audit log: every remote query with user, time and fu
 - **Embedded q:** run q inside Python, for example to read HDB files directly. This needs the licence (`QLIC`).
 
 ```bash
-set -a; . mcp-server/.env.prices; set +a
+set -a; . mcp-server/.env; set +a
 QLIC=~/qlic mcp-server/.venv/bin/python
 ```
 
 ```python
 import os, pykx as kx
 
-conn = kx.SyncQConnection(host="127.0.0.1", port=5001,            # kdb-prices
-                          username="ro_prices", password=os.environ["KDBX_DB_PASSWORD"])
+conn = kx.SyncQConnection(host="127.0.0.1", port=5000,
+                          username="mcp_ro", password=os.environ["KDBX_DB_PASSWORD"])
 
 conn("tables[]")                                                   # pykx SymbolVector
 df = conn("select from daily_prices where date=2026.09.30").pd()   # .pd() → pandas DataFrame
@@ -151,11 +150,11 @@ Results come back as pykx objects that wrap q data. Call `.pd()` for pandas or `
 
 ## 8. How this project secures kdb
 
-All the code is in `kdb/init.q`, which every role's q process runs. q lets you override **callback hooks** that run on every connection or query:
+All the code is in `kdb/init.q`. q lets you override **callback hooks** that run on every connection or query:
 
 ```mermaid
 flowchart TD
-    C[client connects] --> PW{".z.pw<br/>this role's user +<br/>password ok?"}
+    C[client connects] --> PW{".z.pw<br/>user + password ok?"}
     PW -- no --> X[rejected]
     PW -- yes --> Q[client sends a query] --> PG{".z.pg<br/>is it the MCP server's<br/>exact SQL call?"}
     PG -- yes --> RO{"SELECT/WITH only?<br/>no ; or comments<br/>no INSERT/DROP/INTO..."}
@@ -166,7 +165,7 @@ flowchart TD
 
 | Hook | Our override |
 |---|---|
-| `.z.pw[user;password]` | Only this role's user (`KDB_ROLE_USER`) may log in, checked against `users.txt` (salted SHA-1). Anonymous users, unknown users and other roles' users are rejected. The file is re-read on each login. |
+| `.z.pw[user;password]` | Only `KDB_USER` (`mcp_ro`) may log in, checked against `users.txt` (salted SHA-1). Anonymous and unknown users are rejected. The file is re-read on each login. |
 | `.z.pg[query]` (sync query) | Logs the query. The MCP server's SQL call goes through a read-only SQL check. Everything else runs under `reval`, q's built-in read-only sandbox. |
 | `.z.ps` (async query) | Same, always under `reval`. |
 | `.z.ph`, `.z.pp`, `.z.ws` | HTTP and websocket access are disabled. |
@@ -174,8 +173,8 @@ flowchart TD
 Why the SQL path is special: KX's `.s.e` writes an internal counter, so it can't run inside `reval`. It runs unrestricted instead, but only after the SQL text passes `.sec.readOnly`: a single `SELECT`/`WITH` statement with no write keywords outside quoted strings.
 
 Layers of defence:
-- **Read-only, role-only files:** each container mounts only its role's view, read-only, so the files can't change and other tables' files aren't there ([06-roles.md](06-roles.md)).
-- **Fail closed:** the port opens on the last line of `init.q` (`\p 5000`). If the role, the HDB view or the credentials can't be loaded, q exits and nothing is exposed.
+- **Read-only files:** the HDB is mounted read-only in the container, so the files can't change even if everything else failed.
+- **Fail closed:** the port opens on the last line of `init.q` (`\p 5000`). If the user setting, the HDB or the credentials can't be loaded, q exits and nothing is exposed.
 - **Startup warm-up:** `init.q` counts each table once. Counting a partitioned table caches per-partition counts in a global (`.Q.PN`), which `reval` would block for clients.
 - **Resource limits:** `-T 30` cancels queries after 30s. `-w 2000` caps memory at 2 GB; q aborts and Docker restarts it.
 
@@ -184,10 +183,10 @@ Layers of defence:
 | File | Purpose |
 |---|---|
 | `kdb/Dockerfile` | Debian + q binary + SQL module (`s.k_`). The licence is mounted at runtime |
-| `kdb/docker-compose.yml` | Three role q processes (`kdb-prices/trades/quotes`) + `hdb-builder` (writes the HDB) + `kdb-admin` (console) |
+| `kdb/docker-compose.yml` | `kdbx` server (HDB read-only) + `hdb-builder` (writes the HDB) + `kdb-admin` (console) |
 | `kdb/gen_data.q` | Builds the simulated `daily_prices`, `trades` and `quotes` tables in memory (fixed seed) |
-| `kdb/build_hdb.q` | Writes them to `kdb/data/hdb/` as a date-partitioned HDB, plus the per-role views (`make kdb-hdb`) |
-| `kdb/init.q` | Role process startup: loads the role's view, enables SQL, installs security, opens the port |
-| `kdb/mkuser.sh <role>` | Creates or rotates a role's password and MCP config (`make kdb-users` does all three) |
-| `kdb/test_security.q`, `kdb/test.sh` | Auth, read-only and isolation tests, run in each role's container (`make kdb-test`) |
+| `kdb/build_hdb.q` | Writes them to `kdb/data/hdb/` as a date-partitioned HDB (`make kdb-hdb`) |
+| `kdb/init.q` | Server startup: loads the HDB, enables SQL, installs security, opens the port |
+| `kdb/mkuser.sh` | Creates or rotates the `mcp_ro` password and writes `mcp-server/.env` (`make kdb-user`) |
+| `kdb/test_security.q` | Auth and read-only tests (`make kdb-test`) |
 | `kdb/expected.q` | Reference answers for the end-to-end tests |
