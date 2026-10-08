@@ -181,7 +181,7 @@ protects stored data, not the process — which is why the escape itself must be
 ### The fix (committed)
 
 Defence in depth, blocking the escape **before** `.s.e`:
-1. **kdb (authoritative), `kdb/init.q`:** `.sec.fnames` extracts the function names called in the SQL — an identifier immediately before `(`, on the unquoted text so string literals can't hide it — and rejects the query if `q` or `qt` is called. This is syntactic, so it distinguishes the escape `q(...)` from a table alias `q` or a qualified column `q."date"` (neither is followed by `(`), and doesn't false-positive on names like `freq(`.
+1. **kdb (authoritative), `kdb/init.q`:** `.sec.fnames` extracts the function names called in the SQL — an identifier run immediately before `(`, skipping any whitespace (space/tab/newline) in between, on the unquoted text so string literals can't hide it — and rejects the query if `q` or `qt` is called, or any dotted call such as `.s.F(...)`. This is syntactic, so it distinguishes the escape `q(...)` from a table alias `q` or a qualified column `q."date"` (neither is followed by `(`), and doesn't false-positive on names like `freq(`.
 2. **agent (second layer), `agent/access.py`:** sqlglot already models `q(...)`/`qt(...)` as function calls, so `violation()` blocks them too. This matters because the MCP server has no auth of its own: anything that can reach it bypasses the agent otherwise.
 3. **kdb stays read-only** underneath, and the credentials file password was rotated.
 4. **Regression tests** (benign probes) in `kdb/test_security.q` and `agent/tests/test_access.py`.
@@ -205,7 +205,7 @@ h(sqlCall;"SELECT * FROM qt('([]x:enlist `zzprobe set 1)')";10)   / tries to cre
 h"zzprobe"                                                        / was it written?
 ```
 
-Expected: the call raises `'q-escape functions (q/qt) are not allowed`, and `h"zzprobe"` raises `'zzprobe`
+Expected: the call raises `'q-escape functions (q/qt/.s.*) are not allowed`, and `h"zzprobe"` raises `'zzprobe`
 (no global created). A normal read like `h(sqlCall;"SELECT \"close\" FROM daily_prices WHERE \"sym\"='T001' LIMIT 1";10)` still works.
 
 **B. See the write SUCCEED on a throwaway (unfixed, in-memory copy — never the real server).** Save this as

@@ -49,6 +49,10 @@ chk["lambda row limit blocked";err[h;(sqlCall;T"SELECT 1 FROM TBL";{system"ls";0
 chk["SQL q-escape qt() blocked";err[sql;"SELECT * FROM qt('([]a:1 2)')"]];
 chk["SQL q-escape q() blocked";err[sql;"SELECT q('J';'count';\"sym\") FROM TBL"]];
 chk["SQL q-escape set no global";err[sql;"SELECT * FROM qt('([]x:enlist `zzprobe set 1)')"]];
+chk["SQL q-escape qt tab blocked";err[sql;"SELECT * FROM qt\t('([]x:enlist `zzprobe set 1)')"]];
+chk["SQL q-escape qt newline blocked";err[sql;"SELECT * FROM qt\n('([]x:enlist `zzprobe set 1)')"]];
+chk["SQL q-escape qt 2-space blocked";err[sql;"SELECT * FROM qt  ('([]x:enlist `zzprobe set 1)')"]];
+chk["SQL dotted .s.F blocked";err[sql;"SELECT * FROM .s.F('t';'x')"]];
 chk["no zzprobe global written";err[h;"zzprobe"]];
 chk["creds not readable via .sec.creds";err[h;".sec.creds[]"]];
 chk["no hashes in .z.pw (plain lambda, not a projection)";100h=type h".z.pw"];

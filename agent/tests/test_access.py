@@ -43,6 +43,11 @@ BLOCKED = [  # attempts to reach other tables, write, or confuse the parser
     "SELECT * FROM qt('([]a:1 2)')",                   # KX q-escape: run a q table expression
     "SELECT q('J','count',\"close\") FROM daily_prices",  # KX q-escape: run a q expression
     "SELECT * FROM QT('([]a:1 2)')",                   # case-insensitive
+    "SELECT * FROM qt\t('([]a:1 2)')",                 # tab before '(' (whitespace bypass class)
+    "SELECT * FROM qt\n('([]a:1 2)')",                 # newline before '('
+    "SELECT * FROM qt  ('([]a:1 2)')",                 # multiple spaces before '('
+    "SELECT q\n('J','count',\"close\") FROM daily_prices",
+    "SELECT * FROM .s.F('t','x')",                      # dotted q call escape
     "SELEC * FRM daily_prices",
     "",
 ]

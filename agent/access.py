@@ -67,5 +67,5 @@ def filter_schema(schema: str, allowed: set[str]) -> str:
     """
     marker = "TABLE ANALYSIS: "
     sections = schema.split(marker)[1:]  # sections[i] starts with the table name
-    kept = [marker + s for s in sections if s.split()[0].lower() in allowed]
+    kept = [marker + s for s in sections if s.split()[:1] and s.split()[0].lower() in allowed]
     return f"Tables you can query: {', '.join(sorted(allowed))}\n\n" + "\n".join(kept)

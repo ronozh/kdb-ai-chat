@@ -37,19 +37,20 @@ if[()~key `:/db/sym; -2 "fatal: no HDB at /db (run: make kdb-hdb)"; exit 1];
     any w in ("INSERT";"UPDATE";"DELETE";"CREATE";"DROP";"ALTER";"TRUNCATE";"INTO";"MERGE";"REPLACE";"UPSERT";"GRANT");0b;
     1b]};
 .sec.trim:{[q] $[10h<>type q;q;{(neg sum mins reverse x in " \t\r\n;")_x}trim q]};   / drop trailing ;
-/ Function names called in the SQL: an identifier run immediately before '(' (spaces before '(' ignored).
+/ Function names called in the SQL: an identifier run before '(' (any whitespace before '(' skipped).
 / Works on unquoted text, so string literals can't hide a call. Distinguishes the q(...)/qt(...) escapes
-/ from a table alias `q` or a qualified column q."date" (neither is followed by '(').
-.sec.idc:{x in .Q.A,"0123456789_"};
+/ from a table alias `q` or a qualified column q."date" (neither is followed by '('). '.' is an identifier
+/ char here so a dotted q call like .s.F(...) is captured whole and blocked by the "*.*" check below.
+.sec.idc:{x in ".",.Q.A,"0123456789_"};
 .sec.fnames:{[sql]
   u:upper .sec.unquote sql;
-  u:u where not (u=" ")&next[u]="(";
-  back:{[u;p] n:0; while[(p>n)&.sec.idc u (p-1)-n; n+:1]; `$u[(p-n)+til n]};
+  back:{[u;p] while[(p>0)&u[p-1] in " \t\r\n";p-:1]; n:0; while[(p>n)&.sec.idc u (p-1)-n; n+:1]; `$u[(p-n)+til n]};
   distinct back[u] each where u="("};
 .sec.qEscape:`Q`QT;   / KX SQL functions that evaluate q; must never reach .s.e (they run outside reval)
 .sec.sql:{[q;n] if[not (type n) in -5 -6 -7h;'"bad row limit"];   / n reaches sublist unrestricted
   q:.sec.trim q; if[not .sec.readOnly q;'"read-only: only a single SELECT/WITH statement is allowed"];
-  if[any .sec.qEscape in .sec.fnames q;'"q-escape functions (q/qt) are not allowed"];
+  f:.sec.fnames q;   / block q(...)/qt(...) and any dotted q call such as .s.F(...)
+  if[(any .sec.qEscape in f) or any f like "*.*";'"q-escape functions (q/qt/.s.*) are not allowed"];
   r:.s.e q; `rowCount`data!(count r;.j.j n sublist r)};
 / audit log: one line per remote query
 / wide console so the audit log shows whole queries (q truncates printed values to the console width)
