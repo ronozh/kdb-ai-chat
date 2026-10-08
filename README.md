@@ -2,6 +2,12 @@
 
 Natural-language chat over a KDB-X price database. Spec: `doc/plan.md`. Setup: `doc/setup-licence-and-keys.md`.
 
+**Understand the project** (read in order):
+1. [Architecture and infrastructure](doc/01-architecture.md)
+2. [kdb: the database, q, SQL, pykx](doc/02-kdb.md)
+3. [The agent: Pydantic AI + MCP](doc/03-agent.md)
+4. [MCP and the KDB-X MCP server](doc/04-mcp-server.md)
+
 ## Prerequisites
 
 Docker Desktop, Node 20+, `uv`, and the KDB-X licence in `~/qlic` plus a Gemini key in `agent/.env` (see `doc/setup-licence-and-keys.md`).
