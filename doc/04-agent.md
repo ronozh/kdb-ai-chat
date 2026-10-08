@@ -62,10 +62,12 @@ ModelResponse  [TextPart("The close of T001 on 2026-06-15 was 523.21.")]
 
 | Concept | In our code | Meaning |
 |---|---|---|
-| `Agent(model, ...)` | `Agent(AGENT_MODEL, toolsets=[toolset], instructions=INSTRUCTIONS)` | The loop plus its configuration |
+| `Agent(model, ...)` | `Agent(AGENT_MODEL, deps_type=str, instructions=INSTRUCTIONS)` | The loop plus its configuration |
 | Model string | `"google:gemini-3.1-flash-lite"` | `provider:model`. Switch to `"anthropic:claude-haiku-4-5"` and nothing else changes |
-| Instructions | `INSTRUCTIONS` + `@agent.instructions def db_context()` | System-prompt text sent on every call. A decorated function is evaluated on each run, so its text can change at runtime |
-| Toolset | `MCPToolset(MCP_URL)` | A group of tools. `MCPToolset` gets its tools from an MCP server |
+| Instructions | `INSTRUCTIONS` + `@agent.instructions def db_context(ctx)` | System-prompt text sent on every call. A decorated function is evaluated on each run, so its text can depend on the request |
+| Deps | `deps=req.role` → `ctx.deps` | A value you pass into a run, readable by instruction functions and tools. Ours is the caller's role |
+| Toolset | `MCPToolset(url)` per role | A group of tools. `MCPToolset` gets its tools from an MCP server |
+| Per-run toolsets | `agent.run(..., toolsets=[toolsets[role]])` | Tools available for **this run only**. Our code chooses them; the LLM can't |
 | `agent.run(prompt, message_history=...)` | `/chat` | Runs the whole loop; returns `AgentRunResult` |
 | `result.output` | answer text | The final `TextPart` |
 | `result.all_messages()` / `new_messages()` | history / this turn only | Lists of `ModelRequest`/`ModelResponse` |
@@ -73,83 +75,93 @@ ModelResponse  [TextPart("The close of T001 on 2026-06-15 was 523.21.")]
 
 ## 4. The code, top to bottom
 
-### Setup (lines 1–27)
+### Setup and config
 
 ```python
 load_dotenv()                                    # read agent/.env into os.environ
 AGENT_MODEL = os.getenv("AGENT_MODEL", "google:gemini-3.5-flash")
-MCP_URL = os.getenv("MCP_URL", "http://127.0.0.1:8000/mcp")
+ROLE_MCP_URLS = {"prices": "http://127.0.0.1:8101/mcp",    # one MCP server per role
+                 "trades": "http://127.0.0.1:8102/mcp",    # (overridable: MCP_URL_<ROLE>)
+                 "quotes": "http://127.0.0.1:8103/mcp"}
+AGENT_TOKEN = os.getenv("AGENT_TOKEN", "")       # shared secret: only Tomcat may call /chat
 ```
 
 `load_dotenv()` runs before the Pydantic AI imports, so `GOOGLE_API_KEY` is already set when the Google provider reads it.
 
-### Instructions (lines 29–50)
+### Instructions
 
-`INSTRUCTIONS` holds the rules (always query, never calculate by hand, say when there's no data, refuse writes) plus **SQL dialect notes**. The notes exist because KX SQL lacks features the LLM would otherwise reach for, such as `LAG()`. This is plain prompt engineering: text that steers the model. Every SQL pattern in it was tested against kdb.
+`INSTRUCTIONS` holds the rules (always query, never calculate by hand, say when there's no data, say when data isn't in your tables, refuse writes) plus **SQL dialect notes**. The notes exist because KX SQL lacks features the LLM would otherwise reach for, such as `LAG()`. This is plain prompt engineering: text that steers the model. Every SQL pattern in it was tested against kdb.
 
-`FALLBACK_SCHEMA` is a hand-written table description, used only if the MCP resources can't be read at startup.
+`FALLBACK_SCHEMA` is a hand-written description per role, used only if that role's MCP resources can't be read at startup.
 
-### The agent and its tools (lines 52–60)
+### The agent, the toolsets, and per-role context
 
 ```python
-toolset = MCPToolset(MCP_URL)
-agent = Agent(AGENT_MODEL, toolsets=[toolset], instructions=INSTRUCTIONS)
-state = {"context": FALLBACK_SCHEMA}
-sessions: dict[str, list[ModelMessage]] = {}     # session_id → message history (in memory)
+toolsets = {role: MCPToolset(url) for role, url in ROLE_MCP_URLS.items()}
+agent = Agent(AGENT_MODEL, deps_type=str, instructions=INSTRUCTIONS)   # no tools attached here
+contexts = dict(FALLBACK_SCHEMA)                       # role → schema + SQL guidance text
+sessions: dict[tuple[str, str], list[ModelMessage]] = {}   # (role, session_id) → history
 
 @agent.instructions
-def db_context() -> str:
-    return state["context"]                      # appended to the instructions on every run
+def db_context(ctx: RunContext[str]) -> str:
+    return contexts[ctx.deps]                          # ctx.deps = this run's role
 ```
 
-Note that **no tool is written in this file.** `MCPToolset` asks the MCP server which tools exist and turns each one into a Pydantic AI tool automatically. Add a tool to the MCP server and the agent can use it with no code change here.
+- **No tool is written in this file.** `MCPToolset` asks its MCP server which tools exist and turns each one into a Pydantic AI tool automatically.
+- **No tools are attached to the agent.** Each run is given exactly one toolset, its role's, so the LLM can't even see another role's tools.
+- **History is keyed by role**, so data one role saw never ends up in another role's prompt.
 
-### Startup: load schema and SQL guidance (lines 63–83)
+### Startup: load each role's schema and SQL guidance
 
 ```python
-async def load_mcp_context():
-    for res in await toolset.list_resources():           # MCP "resources" = read-only documents
+async def load_mcp_context(role):
+    for res in await toolsets[role].list_resources():     # MCP "resources" = read-only documents
         if res.name in ("kdbx_describe_tables", "kdbx_sql_query_guidance"):
-            content = await toolset.read_resource(res.uri)
-            ...
-    state["context"] = "\n\n".join(parts)                # becomes part of the instructions
+            ...read it...
+    contexts[role] = "\n\n".join(parts)                    # becomes that role's instructions
 
 @asynccontextmanager
-async def lifespan(_):                                   # FastAPI runs this once at startup
-    async with toolset:                                  # open an MCP connection just for this
-        await load_mcp_context()
-    yield                                                # app serves requests from here on
+async def lifespan(_):                                     # FastAPI runs this once at startup
+    if not AGENT_TOKEN: raise RuntimeError(...)            # fail closed: no token, no service
+    for role, toolset in toolsets.items():
+        async with toolset:                                # open an MCP connection just for this
+            await load_mcp_context(role)
+    yield                                                  # app serves requests from here on
 ```
 
-MCP servers offer **tools** (actions the LLM can call) and **resources** (documents). We read two resources once and put them in the prompt: the table schema with sample rows, and KX's SQL guide. The LLM therefore knows the column names before it writes its first query.
+MCP servers offer **tools** (actions the LLM can call) and **resources** (documents). For each role we read two resources once and put them in that role's prompt: its table schema with sample rows (only its own table) and KX's SQL guide.
 
-### The chat endpoint (lines 112–138)
+### The chat endpoint
 
 ```python
 @app.post("/chat")
-async def chat(req: ChatRequest):
+async def chat(req: ChatRequest, x_agent_token: str = Header(default="")):
+    if not secrets.compare_digest(x_agent_token, AGENT_TOKEN):   # only Tomcat knows the token
+        raise HTTPException(401, ...)
+    if req.role not in toolsets:
+        raise HTTPException(403, ...)
+    key = (req.role, req.session_id)
     for delay in (*RETRY_DELAYS, None):                  # (5, 10, None) → up to 3 attempts
         try:
-            result = await agent.run(req.question,
-                                     message_history=sessions.get(req.session_id))
+            result = await agent.run(req.question, message_history=sessions.get(key),
+                                     deps=req.role, toolsets=[toolsets[req.role]])
             break
         except ModelHTTPError as e:                      # Gemini returned an HTTP error
             if e.status_code not in (429, 503) or "PerDay" in str(e.body) or delay is None:
                 raise HTTPException(502, ...)            # not retryable → 502 to Tomcat
             await asyncio.sleep(delay)                   # rate limit / overload → wait, retry
-        except Exception as e:
-            raise HTTPException(502, ...)
-    sessions[req.session_id] = result.all_messages()     # save history for the next turn
+    sessions[key] = result.all_messages()                # save history for the next turn
     sql = sql_from(result.new_messages())                # SQL actually run this turn
-    log.info(json.dumps({...tokens, sql, duration...}))  # one structured log line per request
+    log.info(json.dumps({...role, tokens, sql...}))      # one structured log line per request
     return ChatResponse(answer=result.output, sql=sql, ...)
 ```
 
-- **`agent.run(...)` is the whole loop from section 1.** It connects to the MCP server, calls Gemini, runs tools and repeats, then returns. Each run opens and closes its own MCP connection, so the agent keeps working if the MCP server restarts.
+- **`agent.run(...)` is the whole loop from section 1.** It connects to the role's MCP server, calls Gemini, runs tools and repeats, then returns. Each run opens and closes its own MCP connection, so the agent keeps working if an MCP server restarts.
+- **The role comes from Tomcat, not from the question.** The LLM has no way to change it.
 - **Retries:** 429 (rate limit) and 503 (overloaded) are temporary, so we retry twice. A daily quota doesn't reset in seconds, so we don't retry it. The total wait stays well under Tomcat's 90s timeout.
-- **History** lives in a Python dict, so it's lost on restart. That's fine for Phase 1.
+- **History** lives in a Python dict, so it's lost on restart. That's fine for a demo.
 
-### Getting the SQL that was run (lines 102–109)
+### Getting the SQL that was run
 
 ```python
 def sql_from(messages):
@@ -161,31 +173,39 @@ def sql_from(messages):
 
 The SQL comes from the **tool-call records**, not from the answer text. That's what was really sent to kdb, and it's what the UI shows under "Show SQL".
 
-### Health (lines 141–149)
+### Health
 
-`/health` opens an MCP connection and reads the `kdbx://tables` resource. This goes all the way to kdb, so it fails if either the MCP server or kdb is down.
+`/health` reads the `kdbx://tables` resource through **each** role's MCP server. This goes all the way to each kdb process, and reports per role.
 
 ## 5. Who controls what
 
 | Concern | Controlled by |
 |---|---|
 | Which SQL to write | The LLM, guided by the instructions, schema and guidance |
-| Running the SQL | MCP server → kdb (the LLM only *asks*) |
-| What SQL is allowed | kdb (`init.q`): read-only, enforced in the database |
+| Running the SQL | The role's MCP server → the role's kdb process (the LLM only *asks*) |
+| What SQL is allowed, and which tables exist | kdb (`init.q` + what each role's process loaded): enforced in the database |
+| Which role a request runs as | Tomcat (user → role), passed to the agent, never chosen by the LLM |
 | The numbers in the answer | kdb results. The LLM is told to copy them, not compute them |
-| Conversation memory | Our `sessions` dict |
+| Conversation memory | Our `sessions` dict, keyed by (role, session) |
 | Which LLM | `AGENT_MODEL` in `agent/.env` |
 
 ## 6. Try it
 
 ```bash
 curl -s 127.0.0.1:8001/health
+T=$(grep ^AGENT_TOKEN agent/.env | cut -d= -f2)          # pretend to be Tomcat
+curl -s 127.0.0.1:8001/chat -H 'content-type: application/json' -H "X-Agent-Token: $T" \
+  -d '{"session_id":"s1","user_id":"me","role":"prices","question":"What was the close of T001 on 2026-06-15?"}'
+curl -s 127.0.0.1:8001/chat -H 'content-type: application/json' -H "X-Agent-Token: $T" \
+  -d '{"session_id":"s1","user_id":"me","role":"prices","question":"and T002?"}'   # same session → uses history
 curl -s 127.0.0.1:8001/chat -H 'content-type: application/json' \
-  -d '{"session_id":"s1","user_id":"me","question":"What was the close of T001 on 2026-06-15?"}'
-curl -s 127.0.0.1:8001/chat -H 'content-type: application/json' \
-  -d '{"session_id":"s1","user_id":"me","question":"and T002?"}'      # same session → uses history
+  -d '{"session_id":"s1","user_id":"me","role":"prices","question":"hi"}'          # no token → 401
 ```
+
+Normally you go through Tomcat instead: `curl -s 127.0.0.1:8090/api/chat -H 'X-Demo-User: bob' ...`.
 
 The agent log line for each request shows the SQL, the token counts and the number of LLM requests.
 
-Tests: `agent/tests/test_e2e.py` asks the test questions from the plan (section 6) against a running agent and compares the answers with `make kdb-expected`. They call the real LLM, so mind the free-tier quota (about 20 requests per day per model).
+Tests:
+- `make test` runs `agent/tests/test_roles.py`: role isolation through each MCP server, plus the agent and Tomcat guards. No LLM is involved.
+- `make test-llm` runs `agent/tests/test_e2e.py`: the plan's questions, plus trades and quotes questions, compared with `make kdb-expected`. These call the real LLM, so mind the free-tier quota (about 20 requests per day per model).

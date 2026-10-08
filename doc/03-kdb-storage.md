@@ -56,36 +56,30 @@ Clients see one endpoint and don't need to know where the data lives.
 
 ## 4. What an HDB looks like on disk
 
-**A database is a directory, and a table is a folder of column files.** Our HDB (`kdb/hdb/`, about 8 MB):
+**A database is a directory, and a table is a folder of column files.** Our HDB (`kdb/data/hdb/`, about 73 MB, three tables):
 
 ```
-kdb/hdb/                       ← the database: what `\l /hdb` loads
-├── sym                        ← symbol list for the whole DB: `T001`T002…`Acme Analytics…
+kdb/data/hdb/                  ← the database: what `\l` loads
+├── daily_prices_sym           ← symbol list for daily_prices: `T001`T002…`Acme Analytics…
+├── trades_sym                 ← symbol list for trades
+├── quotes_sym                 ← symbol list for quotes
 ├── 2025.10.01/                ← one folder per date (a "partition")
-│   └── daily_prices/          ← a table = a folder
-│       ├── .d                 ← column order: `sym`name`close`volume
-│       ├── sym                ← one file per column (integer indexes into /hdb/sym)
-│       ├── name
-│       ├── close              ← a binary array of 100 floats
-│       └── volume
-├── 2025.10.02/
-│   └── daily_prices/ …
+│   ├── daily_prices/          ← a table = a folder        (100 rows: 1 per ticker)
+│   │   ├── .d                 ← column order: `sym`name`close`volume
+│   │   ├── sym                ← one file per column (integer indexes into daily_prices_sym)
+│   │   ├── name
+│   │   ├── close              ← a binary array of 100 floats
+│   │   └── volume
+│   ├── trades/                ← .d sym time price size        (2,000 rows: 20 per ticker)
+│   └── quotes/                ← .d sym time bid ask bsize asize (4,000 rows: 40 per ticker)
+├── 2025.10.02/ …
 └── … 261 date folders
-```
-
-With three tables (for example `daily_prices`, `trades`, `quotes`), each date folder simply has three table folders:
-
-```
-2026.09.29/
-├── daily_prices/  .d sym name close volume
-├── trades/        .d sym time price size
-└── quotes/        .d sym time bid ask bsize asize
 ```
 
 Key points:
 - **There's no `date` file.** The date comes from the folder name, and q adds it as a virtual column.
 - **Each column is a flat binary array**, so reading one column means reading one file.
-- **Symbols are stored once** in the root `sym` file. Column files store small integers that point into it (called *enumeration*, like a pandas category).
+- **Symbols are stored once**, in a symbol file at the root. Column files store small integers that point into it (called *enumeration*, like a pandas category). A database usually has one shared `sym` file. We give **each table its own** (`<table>_sym`) so each role's view is self-contained ([06-roles.md](06-roles.md#3-one-database-three-views-the-storage-trick)).
 - **Within a day, rows are sorted by `sym`**, and `sym` carries the `p` (parted) attribute, so finding one ticker's rows is a quick lookup. `meta daily_prices` shows `a=p`.
 - Small reference tables (for example ticker master data) usually sit at the root as one folder, not split by date.
 
@@ -109,21 +103,21 @@ That's why **you should always filter on `date` first**. Without it, q touches e
 
 ## 6. Seeing and reading the files yourself
 
-The HDB is a normal folder on your Mac (`kdb/hdb/`, git-ignored):
+The HDB is a normal folder on your Mac (`kdb/data/hdb/`, git-ignored):
 
 ```bash
-ls kdb/hdb | head                               # date folders
-ls -la kdb/hdb/2026.09.29/daily_prices          # .d sym name close volume
-du -sh kdb/hdb                                  # size
-xxd kdb/hdb/2026.09.29/daily_prices/close | head  # raw bytes: header + 8-byte floats
+ls kdb/data/hdb | head                                # date folders + the 3 symbol files
+ls -la kdb/data/hdb/2026.09.29/trades                 # .d sym time price size
+du -sh kdb/data/hdb                                   # size
+xxd kdb/data/hdb/2026.09.29/daily_prices/close | head # raw bytes: header + 8-byte floats
 ```
 
-The files are **binary**, so read them with q. In a scratch session (`docker exec -it kdbx q /hdb`):
+The files are **binary**, so read them with q. In the admin session (`make kdb-admin`, which mounts the HDB at `/hdb`):
 
 ```q
 get `:/hdb/2026.09.29/daily_prices/.d       / → `sym`name`close`volume
 get `:/hdb/2026.09.29/daily_prices/close    / → 100 floats
-get `:/hdb/sym                              / → `T001`T002…
+get `:/hdb/daily_prices_sym                 / → `T001`T002…`Acme Analytics…
 get `:/hdb/2026.09.29/daily_prices          / → that day's table
 date                                        / → all partition dates
 ```
@@ -134,22 +128,23 @@ date                                        / → all partition dates
 
 ```mermaid
 flowchart LR
-    G[gen_data.q<br/>table in memory] --> B["build_hdb.q<br/>(hdb-builder container,<br/>writes ./hdb)"]
-    B --> D[(kdb/hdb/<br/>date folders)]
-    D -->|mounted read-only| S["kdbx server<br/>init.q: \l /hdb"]
+    G[gen_data.q<br/>3 tables in memory] --> B["build_hdb.q<br/>(hdb-builder container,<br/>writes ./data)"]
+    B --> D[(data/hdb/<br/>date folders)]
+    B --> V[(data/roles/&lt;role&gt;/<br/>hard links to one table)]
+    V -->|mounted read-only, one view each| S["kdb-prices / kdb-trades / kdb-quotes<br/>init.q: \l /db"
 ```
 
-- `make kdb-hdb` runs the one-off `hdb-builder` container, which runs `build_hdb.q`. For each date, `.Q.dpft[db;date;`sym;`daily_prices]` writes the partition: it enumerates symbols against `/hdb/sym`, sorts by `sym`, and applies `p#`.
-- `make kdb` builds the HDB first if `kdb/hdb/sym` doesn't exist.
-- The server mounts `kdb/hdb` **read-only**. Only the builder can write to it, the way a production EOD process is the only writer.
-- To rebuild: `rm -rf kdb/hdb && make kdb-hdb && docker restart kdbx`.
+- `make kdb-hdb` runs the one-off `hdb-builder` container, which runs `build_hdb.q`. For each table and date, `.Q.dpfts[db;date;`sym;`table;`table_sym]` writes the partition: it enumerates symbols against that table's symbol file, sorts by `sym`, and applies `p#`. Then it creates each role's view with hard links (`cp -al`).
+- `make kdb` builds the HDB first if `kdb/data/hdb` doesn't exist.
+- Each role's q process mounts only its view, **read-only**. Only the builder can write, the way a production EOD process is the only writer.
+- To rebuild: `rm -rf kdb/data && make kdb-hdb && make kdb`.
 
 ## 8. Adding an RDB later
 
 The HDB stays as it is. You'd add:
-1. A **TP + RDB** (plus a small feed script) with the same `daily_prices` columns, holding today's data.
-2. A **gateway** process. Then point the MCP server at it: `KDBX_DB_PORT` in `mcp-server/.env`.
-3. An **EOD** step: write today with `.Q.dpft` into `/hdb`, then reload the HDB (`\l /hdb`).
+1. A **TP + RDB** (plus a small feed script) with the same table columns, holding today's data. With roles, use one RDB per role, or an RDB that serves each role only its table.
+2. A **gateway** per role, and point that role's MCP server at it (`KDBX_DB_PORT` in `mcp-server/.env.<role>`).
+3. An **EOD** step: write today with `.Q.dpfts` into `data/hdb`, add the new date's hard links to each role view, then reload each role's process (`\l /db`).
 4. The same security for every process. Move the security part of `init.q` into a shared `sec.q`.
 
 The hard part is the gateway: SQL that covers both today and history has to be split and merged.

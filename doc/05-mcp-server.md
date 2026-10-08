@@ -23,7 +23,7 @@ An MCP server offers three kinds of things:
 
 ## 2. The protocol
 
-MCP is **JSON-RPC 2.0** (request = `{"jsonrpc":"2.0","id":1,"method":...,"params":...}`, response = `{"id":1,"result":...}`). Our server uses the **streamable HTTP** transport: everything is `POST`ed to one URL, `http://127.0.0.1:8000/mcp`. Replies come back as JSON or as a short server-sent-events stream (`event: message` / `data: {...}`).
+MCP is **JSON-RPC 2.0** (request = `{"jsonrpc":"2.0","id":1,"method":...,"params":...}`, response = `{"id":1,"result":...}`). Our server uses the **streamable HTTP** transport: everything is `POST`ed to one URL, e.g. `http://127.0.0.1:8101/mcp` (the prices role's server). Replies come back as JSON or as a short server-sent-events stream (`event: message` / `data: {...}`).
 
 A session, captured with curl from this server:
 
@@ -106,8 +106,8 @@ src/mcp_server/
 ### Startup (`server.py`)
 
 ```python
-self.mcp = FastMCP(name, host="127.0.0.1", port=8000)
-self._check_port_availability()   # fail early if 8000 is taken
+self.mcp = FastMCP(name, host="127.0.0.1", port=KDBX_MCP_PORT)   # 8101 / 8102 / 8103 per role
+self._check_port_availability()   # fail early if the port is taken
 self._check_kdb_connection()      # connect via pykx; check version, SQL loaded (.s), AI libs (.ai)
 self._register_tools()            # tools/__init__.py imports each module and calls its register_tools(mcp)
 self._register_prompts()
@@ -145,9 +145,21 @@ This exact q string is also what `kdb/init.q` recognizes (`.sec.sqlCall`) to sen
 ### Connection and config
 
 - `utils/kdbx.py`: one cached `pykx.SyncQConnection`. If kdb dropped the connection, it reconnects on the next call.
-- `settings.py`: every value comes from env vars, so we configure the server with `mcp-server/.env` and leave its code untouched. Defaults: kdb `127.0.0.1:5000`, MCP `127.0.0.1:8000`, transport `streamable-http`.
+- `settings.py`: every value comes from env vars, so we configure each instance with `mcp-server/.env.<role>` (loaded by `mcp-server/run.sh <role>`) and leave its code untouched. Built-in defaults (we override the ports per role): kdb `127.0.0.1:5000`, MCP `127.0.0.1:8000`, transport `streamable-http`.
 
-## 5. The whole path of one tool call
+## 5. One server per role
+
+The server holds **one** kdb login from its env vars, and different roles can't share it. So we run the same unmodified code three times, with different config:
+
+```
+mcp-server/run.sh prices  → .env.prices: KDBX_MCP_PORT=8101, KDBX_DB_PORT=5001, KDBX_DB_USERNAME=ro_prices
+mcp-server/run.sh trades  → .env.trades: KDBX_MCP_PORT=8102, KDBX_DB_PORT=5002, KDBX_DB_USERNAME=ro_trades
+mcp-server/run.sh quotes  → .env.quotes: KDBX_MCP_PORT=8103, KDBX_DB_PORT=5003, KDBX_DB_USERNAME=ro_quotes
+```
+
+`make mcp` starts all three in the background (logs: `mcp-server/mcp-<role>.log`), and `make mcp-stop` stops them. Each server describes and queries only the table its kdb process has loaded, so `kdbx://tables` on :8102 shows only `trades`. The MCP server isn't the security boundary; kdb is. See [06-roles.md](06-roles.md).
+
+## 6. The whole path of one tool call
 
 ```mermaid
 flowchart LR
@@ -159,13 +171,13 @@ flowchart LR
     T -->|"{status, data}"| F --> P --> L
 ```
 
-## 6. Poke it yourself
+## 7. Poke it yourself
 
 ```bash
-make mcp-check     # MCP Inspector CLI: tools/list + one query
+make mcp-check ROLE=trades     # MCP Inspector CLI: tools/list + the schema resource
 
 # raw protocol with curl
-U=http://127.0.0.1:8000/mcp
+U=http://127.0.0.1:8101/mcp     # prices role (8102 trades, 8103 quotes)
 H=(-H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream')
 SID=$(curl -s -D - "${H[@]}" $U -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"1"}}}' \
       | grep -i mcp-session-id | awk '{print $2}' | tr -d '\r')
@@ -175,4 +187,4 @@ curl -s "${H[@]}" -H "Mcp-Session-Id: $SID" $U \
   -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"kdbx_run_sql_query","arguments":{"query":"SELECT \"sym\",\"close\" FROM daily_prices LIMIT 2"}}}'
 ```
 
-For a GUI, run `npx @modelcontextprotocol/inspector` and connect to `http://127.0.0.1:8000/mcp` (transport: Streamable HTTP).
+For a GUI, run `npx @modelcontextprotocol/inspector` and connect to `http://127.0.0.1:8101/mcp` (transport: Streamable HTTP).

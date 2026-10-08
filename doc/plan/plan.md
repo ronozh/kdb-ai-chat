@@ -185,6 +185,8 @@ Streaming responses, real authentication or SSO, per-user entitlements, persiste
 
 ## 9. Phase 2 — Goal only (detailed plan after Phase 1)
 
+> **Implemented as a demo (2026-10-08):** three tables (`daily_prices`, `trades`, `quotes`) and three read-only roles, each with its own q process, kdb user and MCP server. The agent routes by the role Tomcat sends. Real authentication is still the `X-Demo-User` stub. See `doc/06-roles.md`.
+
 Introduce entitlement-based access so different users see different data:
 
 - Provision multiple read-only kdb roles with different access levels, for example by ticker subset or by column (hiding volume).
