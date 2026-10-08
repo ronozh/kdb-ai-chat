@@ -1,9 +1,9 @@
-/ KDB-X startup for ONE role: load that role's HDB view, SQL interface, security.
-/ Run as: q init.q   with env KDB_ROLE_USER (the only user allowed in) and the role's view mounted read-only at /db.
+/ KDB-X startup: load the HDB, SQL interface, security.
+/ Run as: q init.q   with env KDB_USER (the only user allowed in) and the HDB mounted read-only at /db.
 / The port is opened at the end, only after security is in place.
-.sec.user:`$getenv`KDB_ROLE_USER;
-if[null .sec.user; -2 "fatal: KDB_ROLE_USER not set"; exit 1];
-if[not any (key `:/db) like "*_sym"; -2 "fatal: no HDB view at /db (run: make kdb-hdb)"; exit 1];
+.sec.user:`$getenv`KDB_USER;
+if[null .sec.user; -2 "fatal: KDB_USER not set"; exit 1];
+if[()~key `:/db/sym; -2 "fatal: no HDB at /db (run: make kdb-hdb)"; exit 1];
 \l /db
 .s.init[];
 / Warm the per-partition row-count cache (.Q.PN). Counting writes it, which reval would block for clients.
@@ -14,7 +14,7 @@ if[not any (key `:/db) like "*_sym"; -2 "fatal: no HDB view at /db (run: make kd
 / Re-read on every login, so `make kdb-user` takes effect without a restart and no hashes sit in memory.
 .sec.creds:{{(`$x[;0])!1_'x}":"vs'read0 hsym`$getenv`KDB_USERS_FILE};
 @[.sec.creds;::;{-2 "fatal: cannot read credentials file: ",x; exit 1}];   / fail closed
-/ Only this role's user may log in, even though the file lists every role's user.
+/ Only KDB_USER may log in.
 .z.pw:{[u;p] c:@[.sec.creds;::;{()!()}];
   $[null u;0b;u<>.sec.user;0b;not u in key c;0b;c[u;1]~raze string -33!c[u;0],p]};
 
@@ -53,7 +53,7 @@ if[not any (key `:/db) like "*_sym"; -2 "fatal: no HDB view at /db (run: make kd
 .z.pp:.z.ph;
 .z.ws:{neg[.z.w] "forbidden"};
 
--1 "role user ",string[.sec.user],"; tables ",(", "sv string tables[]),"; ",string[count date]," dates ",string[first date]," to ",string last date;
+-1 "user ",string[.sec.user],"; tables ",(", "sv string tables[]),"; ",string[count date]," dates ",string[first date]," to ",string last date;
 
 / open the port last: if anything above failed, nothing is exposed
 \p 5000

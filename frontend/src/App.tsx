@@ -5,8 +5,8 @@ type Message =
   | { role: 'assistant'; text: string; sql: string[]; durationMs: number }
   | { role: 'error'; text: string }
 
-// Demo users. Tomcat maps each to a read-only data role; the label is only for display.
-const USERS: Record<string, string> = { alice: 'daily prices', bob: 'trades', carol: 'quotes' }
+// Demo users. Tomcat maps each to a user group; the agent enforces the group's tables. The label is only for display.
+const USERS: Record<string, string> = { alice: 'daily prices', bob: 'trades + quotes', carol: 'all tables' }
 
 async function ask(sessionId: string, user: string, question: string) {
   const res = await fetch('/api/chat', {

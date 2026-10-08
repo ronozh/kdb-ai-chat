@@ -1,29 +1,24 @@
-/ Security checks for ONE role's q process. Run: make kdb-test (runs it in each role's container)
-/ Env: ROLE, KDBX_DB_USERNAME/KDBX_DB_PASSWORD (this role), OTHER_USER/OTHER_PW (another role's real login).
-/ Uses the exact call shape the KDB-X MCP server sends.
-role:`$getenv`ROLE; user:getenv`KDBX_DB_USERNAME; pw:getenv`KDBX_DB_PASSWORD; fails:0;
-own:(`prices`trades`quotes!`daily_prices`trades`quotes) role;
-others:`daily_prices`trades`quotes except own;
+/ kdb security checks: auth and read-only. Run: make kdb-test (needs env KDBX_DB_USERNAME / KDBX_DB_PASSWORD)
+/ Uses the exact call shape the KDB-X MCP server sends. Table-level access per user group is enforced
+/ in the agent (see doc/06-access-control.md), not here: mcp_ro can read every table.
+user:getenv`KDBX_DB_USERNAME; pw:getenv`KDBX_DB_PASSWORD; fails:0;
+tbls:`daily_prices`quotes`trades;
 chk:{[lbl;ok] -1 $[ok;"PASS ";"FAIL "],lbl; if[not ok;fails+:1]};
 err:{[f;x] @[f;x;{`err}]~`err};
-T:{ssr[x;"TBL";string own]};                          / put this role's table name into a query template
+T:{ssr[x;"TBL";"daily_prices"]};                       / query templates use daily_prices
 
-/ auth: only this role's user may log in
+/ auth
 chk["anonymous rejected";err[hopen;`::5000]];
 chk["wrong password rejected";err[hopen;`$"::5000:",user,":nope"]];
 chk["unknown user rejected";err[hopen;`$"::5000:bob:",pw]];
-chk["other role's real login rejected here";err[hopen;`$"::5000:",getenv[`OTHER_USER],":",getenv`OTHER_PW]];
 h:hopen`$"::5000:",user,":",pw;
 
 sqlCall:"{r:.s.e x;`rowCount`data!(count r;.j.j y sublist r)}";
 sql:{[q] h(sqlCall;q;1000)};
 n0:h T"count TBL";
 
-/ isolation: this process only has its own table
-chk["tables[] is only ",string own;(enlist own)~h"tables[]"];
-{chk["q cannot see ",string x;err[h;"count ",string x]]} each others;
-{chk["SQL cannot see ",string x;err[sql;"SELECT * FROM ",string[x]," LIMIT 1"]]} each others;
-{chk["no files for ",string x;err[h;"get`:2026.09.29/",string[x],"/.d"]]} each others;
+chk["all tables loaded";tbls~asc h"tables[]"];
+{chk["SQL reads ",string x;1=(sql"SELECT * FROM ",string[x]," LIMIT 1")`rowCount]} each tbls;
 
 / reads
 chk["SQL SELECT returns rows";5=(sql T"SELECT * FROM TBL LIMIT 5")`rowCount];
@@ -53,7 +48,7 @@ chk["lambda row limit blocked";err[h;(sqlCall;T"SELECT 1 FROM TBL";{system"ls";0
 chk["creds not readable via .sec.creds";err[h;".sec.creds[]"]];
 chk["no hashes in .z.pw (plain lambda, not a projection)";100h=type h".z.pw"];
 chk["data unchanged";n0=h T"count TBL"];
-chk["no new tables";(enlist own)~h"tables[]"];
+chk["no new tables";tbls~asc h"tables[]"];
 
 -1 $[fails;string[fails]," FAILED";"ALL PASSED"];
 exit fails

@@ -1,4 +1,8 @@
-"""Agent service: FastAPI + Pydantic AI, querying KDB-X through the KDB-X MCP server."""
+"""Agent service: FastAPI + Pydantic AI, querying KDB-X through the KDB-X MCP server.
+
+Every web user belongs to one group (Tomcat decides). The group's allowed tables (groups.yaml) are
+enforced on every SQL tool call by guard() before it reaches the MCP server; see access.py.
+"""
 
 import asyncio
 import json
@@ -7,6 +11,10 @@ import os
 import secrets
 import time
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -16,17 +24,15 @@ from fastapi import FastAPI, Header, HTTPException  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 from pydantic_ai import Agent, RunContext  # noqa: E402
 from pydantic_ai.exceptions import ModelHTTPError  # noqa: E402
-from pydantic_ai.mcp import MCPToolset  # noqa: E402
+from pydantic_ai.mcp import CallToolFunc, MCPToolset, ToolResult  # noqa: E402
 from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart  # noqa: E402
 
+from access import GROUPS, filter_schema, violation  # noqa: E402
+
 AGENT_MODEL = os.getenv("AGENT_MODEL", "google:gemini-3.5-flash")
-# One MCP server per role; each logs in to kdb as that role's read-only user and sees only that role's table.
-ROLE_MCP_URLS = {
-    "prices": os.getenv("MCP_URL_PRICES", "http://127.0.0.1:8101/mcp"),
-    "trades": os.getenv("MCP_URL_TRADES", "http://127.0.0.1:8102/mcp"),
-    "quotes": os.getenv("MCP_URL_QUOTES", "http://127.0.0.1:8103/mcp"),
-}
+MCP_URL = os.getenv("MCP_URL", "http://127.0.0.1:8000/mcp")
 AGENT_TOKEN = os.getenv("AGENT_TOKEN", "")  # shared secret: only Tomcat may call /chat
+QUERY_LOG = Path(os.getenv("QUERY_LOG", Path(__file__).parent / "logs" / "queries.jsonl"))
 SQL_TOOL = "kdbx_run_sql_query"
 RETRY_DELAYS = (5, 10)  # seconds; free-tier Gemini often returns 429/503. Keep well under Tomcat's 90s timeout.
 
@@ -34,12 +40,13 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 log = logging.getLogger("agent")
 
 INSTRUCTIONS = """You answer questions about market data (simulated stock prices, trades or quotes) stored in a KDB-X database.
-You can only see the table(s) described below. If asked about data not in them, say you don't have access to it.
+You can only query the table(s) described below. If asked about other data, say you don't have access to it.
 Rules:
 - Always query the database with the kdbx_run_sql_query tool for any figure. Never estimate or calculate numbers yourself.
 - In your answer, state the tickers and the date range you used.
 - If a date has no data (weekend, holiday or out of range) or a ticker doesn't exist, say so plainly instead of guessing.
 - You can only read data. Refuse any request to insert, change or delete data.
+- If a query is blocked, tell the user; don't try to work around it.
 - Keep answers short.
 
 KDB-X SQL dialect notes:
@@ -54,47 +61,87 @@ KDB-X SQL dialect notes:
 - Absolute value: CASE WHEN x<0 THEN -x ELSE x END.
 """
 
-FALLBACK_SCHEMA = {
-    "prices": "Table daily_prices: date, sym (T001..T100), name, close (float), volume (long). One row per weekday per ticker.",
-    "trades": "Table trades: date, sym (T001..T100), time, price (float), size (long). Intraday trades.",
-    "quotes": "Table quotes: date, sym (T001..T100), time, bid, ask (float), bsize, asize (long). Intraday quotes.",
-}
+# Used only if the MCP schema resource can't be read at startup.
+FALLBACK_SCHEMA = """TABLE ANALYSIS: daily_prices
+ date, sym (T001..T100), name, close (float), volume (long). One row per weekday per ticker.
+TABLE ANALYSIS: trades
+ date, sym (T001..T100), time, price (float), size (long). Intraday trades.
+TABLE ANALYSIS: quotes
+ date, sym (T001..T100), time, bid, ask (float), bsize, asize (long). Intraday quotes."""
 
-toolsets = {role: MCPToolset(url) for role, url in ROLE_MCP_URLS.items()}
-# No toolsets on the agent itself: each run gets exactly one, chosen by our code from the caller's role (never by the LLM).
-agent = Agent(AGENT_MODEL, deps_type=str, instructions=INSTRUCTIONS)
-contexts: dict[str, str] = dict(FALLBACK_SCHEMA)          # role -> schema + SQL guidance text
-sessions: dict[tuple[str, str], list[ModelMessage]] = {}  # (role, session_id) -> history; roles never share history
+
+@dataclass
+class Caller:
+    user: str
+    group: str
+    session: str = ""
+
+
+async def guard(ctx: RunContext[Caller], call_tool: CallToolFunc, name: str, args: dict[str, Any]) -> ToolResult:
+    """Runs before every MCP tool call: allow only SQL on the caller's tables; log every attempt."""
+    caller = ctx.deps
+    sql = str(args.get("query", ""))
+    reason = f"tool {name} is not allowed" if name != SQL_TOOL else violation(sql, GROUPS[caller.group])
+    log_query(caller, name, sql, reason)
+    if reason:
+        return {"status": "error", "message": f"Blocked: {reason}"}  # the LLM sees this and tells the user
+    return await call_tool(name, args)
+
+
+def log_query(caller: Caller, tool: str, sql: str, reason: str | None) -> None:
+    """Append one JSON line per tool call, allowed or blocked, for later analysis.
+
+    A model retry (429/503) re-runs the whole turn, so the same SQL can appear twice for one question.
+    """
+    QUERY_LOG.parent.mkdir(parents=True, exist_ok=True)
+    entry = {"ts": datetime.now(timezone.utc).isoformat(), "user": caller.user, "group": caller.group,
+             "session": caller.session, "tool": tool, "sql": sql, "allowed": reason is None, "reason": reason}
+    with QUERY_LOG.open("a") as f:
+        f.write(json.dumps(entry) + "\n")
+    if reason:
+        log.warning("blocked %s (%s): %s | %s", caller.user, caller.group, reason, sql)
+
+
+toolset = MCPToolset(MCP_URL, process_tool_call=guard)
+agent = Agent(AGENT_MODEL, deps_type=Caller, toolsets=[toolset], instructions=INSTRUCTIONS)
+state = {"schema": FALLBACK_SCHEMA, "guidance": ""}      # MCP resources, read once at startup
+sessions: dict[tuple[str, str], list[ModelMessage]] = {}  # (group, session_id) -> history; groups never share history
 
 
 @agent.instructions
-def db_context(ctx: RunContext[str]) -> str:
-    return contexts[ctx.deps]  # ctx.deps is the role of this run
+def db_context(ctx: RunContext[Caller]) -> str:
+    """The caller's tables only, plus KX's SQL guidance."""
+    return filter_schema(state["schema"], GROUPS[ctx.deps.group]) + "\n\n" + state["guidance"]
 
 
-async def load_mcp_context(role: str) -> None:
-    """Add the role's MCP schema and SQL guidance resources to its instructions."""
-    toolset, parts = toolsets[role], []
+def unwrap(text: str) -> str:
+    """The KX server returns kdbx://tables as JSON text of [{"type": "text", "text": ...}]; return the plain text."""
+    try:
+        return "\n".join(item["text"] for item in json.loads(text))
+    except (ValueError, TypeError, KeyError):
+        return text
+
+
+async def load_mcp_context() -> None:
+    """Read the MCP server's schema and SQL guidance resources."""
     for res in await toolset.list_resources():
         if res.name in ("kdbx_describe_tables", "kdbx_sql_query_guidance"):
             content = await toolset.read_resource(res.uri)
-            parts.append(content if isinstance(content, str) else "\n".join(map(str, content)))
-    if parts:
-        contexts[role] = "\n\n".join(parts)
-    log.info("role %s: loaded MCP context, %d resources, %d chars", role, len(parts), len(contexts[role]))
+            text = content if isinstance(content, str) else "\n".join(map(str, content))
+            state["schema" if res.name == "kdbx_describe_tables" else "guidance"] = unwrap(text)
+    log.info("loaded MCP context: schema %d chars, guidance %d chars", len(state["schema"]), len(state["guidance"]))
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     if not AGENT_TOKEN:
         raise RuntimeError("AGENT_TOKEN is not set (run: make secrets)")  # fail closed
-    # Each agent run opens its own MCP connection, so the agent recovers when an MCP server restarts.
-    for role, toolset in toolsets.items():
-        try:
-            async with toolset:
-                await load_mcp_context(role)
-        except Exception as e:  # keep the hand-written schema
-            log.warning("role %s: could not read MCP resources, using fallback schema: %s", role, e)
+    # Each agent run opens its own MCP connection, so the agent recovers when the MCP server restarts.
+    try:
+        async with toolset:
+            await load_mcp_context()
+    except Exception as e:  # keep the hand-written schema
+        log.warning("could not read MCP resources, using fallback schema: %s", e)
     yield
 
 
@@ -104,7 +151,7 @@ app = FastAPI(title="kdb-ai-chat agent", lifespan=lifespan)
 class ChatRequest(BaseModel):
     session_id: str
     user_id: str
-    role: str
+    group: str
     question: str
 
 
@@ -116,6 +163,7 @@ class ChatResponse(BaseModel):
 
 
 def sql_from(messages: list[ModelMessage]) -> list[str]:
+    """SQL the LLM asked to run this turn (including any that guard() blocked)."""
     return [
         str(part.args_as_dict().get("query", ""))
         for m in messages
@@ -129,14 +177,14 @@ def sql_from(messages: list[ModelMessage]) -> list[str]:
 async def chat(req: ChatRequest, x_agent_token: str = Header(default="")) -> ChatResponse:
     if not secrets.compare_digest(x_agent_token, AGENT_TOKEN):
         raise HTTPException(status_code=401, detail="missing or invalid X-Agent-Token")
-    if req.role not in toolsets:
-        raise HTTPException(status_code=403, detail=f"unknown role: {req.role}")
-    key = (req.role, req.session_id)
+    if req.group not in GROUPS:
+        raise HTTPException(status_code=403, detail=f"unknown group: {req.group}")
+    caller = Caller(user=req.user_id, group=req.group, session=req.session_id)
+    key = (req.group, req.session_id)
     start = time.perf_counter()
     for delay in (*RETRY_DELAYS, None):
         try:
-            result = await agent.run(req.question, message_history=sessions.get(key),
-                                     deps=req.role, toolsets=[toolsets[req.role]])
+            result = await agent.run(req.question, message_history=sessions.get(key), deps=caller)
             break
         except ModelHTTPError as e:
             daily_quota = "PerDay" in str(e.body)  # retrying a daily quota is pointless
@@ -153,7 +201,7 @@ async def chat(req: ChatRequest, x_agent_token: str = Header(default="")) -> Cha
     duration_ms = int((time.perf_counter() - start) * 1000)
     usage = result.usage
     log.info(json.dumps({
-        "session": req.session_id, "user": req.user_id, "role": req.role, "question": req.question, "sql": sql,
+        "session": req.session_id, "user": req.user_id, "group": req.group, "question": req.question, "sql": sql,
         "duration_ms": duration_ms, "input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens,
         "requests": usage.requests,
     }))
@@ -162,13 +210,10 @@ async def chat(req: ChatRequest, x_agent_token: str = Header(default="")) -> Cha
 
 @app.get("/health")
 async def health() -> dict:
-    roles = {}
-    for role, toolset in toolsets.items():
-        try:
-            async with toolset:
-                await toolset.read_resource("kdbx://tables")  # not cached: really reaches the MCP server and kdb
-            roles[role] = {"ok": True}
-        except Exception as e:
-            roles[role] = {"ok": False, "error": str(e)}
-    ok = all(r["ok"] for r in roles.values())
-    return {"status": "ok" if ok else "degraded", "model": AGENT_MODEL, "roles": roles}
+    try:
+        async with toolset:
+            await toolset.read_resource("kdbx://tables")  # not cached: really reaches the MCP server and kdb
+        mcp = {"ok": True}
+    except Exception as e:
+        mcp = {"ok": False, "error": str(e)}
+    return {"status": "ok" if mcp["ok"] else "degraded", "model": AGENT_MODEL, "mcp": mcp}

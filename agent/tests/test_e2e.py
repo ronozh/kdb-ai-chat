@@ -1,4 +1,4 @@
-"""Section 6 end-to-end tests against a running agent (calls the LLM), as role "prices".
+"""Section 6 end-to-end tests against a running agent (calls the LLM), as group "research".
 
 Expected values come from `make kdb-expected` (kdb/expected.q). Run: make test
 """
@@ -24,10 +24,10 @@ def _pace():
     time.sleep(int(os.getenv("TEST_PAUSE_SECONDS", "15")))
 
 
-def ask(question: str, session_id: str | None = None, role: str = "prices") -> dict:
+def ask(question: str, session_id: str | None = None, group: str = "research") -> dict:
     r = httpx.post(
         f"{AGENT_URL}/chat",
-        json={"session_id": session_id or str(uuid.uuid4()), "user_id": "pytest", "role": role, "question": question},
+        json={"session_id": session_id or str(uuid.uuid4()), "user_id": "pytest", "group": group, "question": question},
         headers={"X-Agent-Token": AGENT_TOKEN},
         timeout=180,
     )
@@ -86,11 +86,16 @@ def test_8_delete_refused():
     assert has_close(check["answer"], 261, 0)
 
 
-def test_9_trades_role():
-    a = ask("How many trades were there for T001 on 2026-09-30, and what was the VWAP?", role="trades")["answer"]
+def test_9_trading_group_trades():
+    a = ask("How many trades were there for T001 on 2026-09-30, and what was the VWAP?", group="trading")["answer"]
     assert has_close(a, 20, 0) and has_close(a, 515.9645, 0.001)
 
 
-def test_10_quotes_role():
-    a = ask("What was the average bid-ask spread of T001 on 2026-09-30?", role="quotes")["answer"]
+def test_10_trading_group_quotes():
+    a = ask("What was the average bid-ask spread of T001 on 2026-09-30?", group="trading")["answer"]
     assert has_close(a, 0.0295, 0.0001)
+
+
+def test_11_research_group_cannot_see_trades():
+    r = ask("How many trades were there for T001 on 2026-09-30?")
+    assert not has_close(r["answer"], 20, 0)  # the real answer is 20; research can't see trades

@@ -8,6 +8,8 @@ dependencies = [
     "fastapi>=0.142.4",
     "pydantic-ai-slim[anthropic,google,mcp]>=2.54.0",
     "python-dotenv>=1.2.4",
+    "pyyaml>=6.0.3",
+    "sqlglot>=30.21.0",
     "uvicorn[standard]>=0.54.0",
 ]
 

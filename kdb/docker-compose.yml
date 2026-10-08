@@ -1,48 +1,24 @@
-# Three read-only kdb roles over ONE HDB. Each role is its own q process that can only see its own table:
-# its container mounts only that role's view (data/roles/<role>, hard links into data/hdb).
-x-kdb-role: &kdb-role
-  build: .
-  image: kdb-ai-chat/kdbx
-  working_dir: /opt/app
-  command: ["q", "init.q", "-T", "30", "-w", "2000"]   # -T: abort client queries after 30s; -w: 2GB cap (q aborts, Docker restarts)
-  stdin_open: true   # q exits on stdin EOF
-  restart: unless-stopped
-
 services:
-  kdb-prices:
-    <<: *kdb-role
-    container_name: kdb-prices
-    ports: ["127.0.0.1:5001:5000"]
-    environment: {KDB_ROLE_USER: ro_prices, KDB_USERS_FILE: /run/secrets/kdb_users.txt}
+  kdbx:
+    build: .
+    image: kdb-ai-chat/kdbx
+    container_name: kdbx
+    ports:
+      - "127.0.0.1:5000:5000"
+    environment:
+      KDB_USER: mcp_ro                                 # the only user allowed to log in
+      KDB_USERS_FILE: /run/secrets/kdb_users.txt
     volumes:
       - ${QLIC:?set QLIC to your licence dir}:/opt/kx/lic:ro
       - ./init.q:/opt/app/init.q:ro
       - ./users.txt:/run/secrets/kdb_users.txt:ro
-      - ./data/roles/prices:/db:ro          # ONLY this role's table
+      - ./data/hdb:/db:ro                              # the HDB, read-only
+    working_dir: /opt/app
+    command: ["q", "init.q", "-T", "30", "-w", "2000"]   # -T: abort client queries after 30s; -w: 2GB cap (q aborts, Docker restarts)
+    stdin_open: true   # q exits on stdin EOF
+    restart: unless-stopped
 
-  kdb-trades:
-    <<: *kdb-role
-    container_name: kdb-trades
-    ports: ["127.0.0.1:5002:5000"]
-    environment: {KDB_ROLE_USER: ro_trades, KDB_USERS_FILE: /run/secrets/kdb_users.txt}
-    volumes:
-      - ${QLIC:?set QLIC to your licence dir}:/opt/kx/lic:ro
-      - ./init.q:/opt/app/init.q:ro
-      - ./users.txt:/run/secrets/kdb_users.txt:ro
-      - ./data/roles/trades:/db:ro          # ONLY this role's table
-
-  kdb-quotes:
-    <<: *kdb-role
-    container_name: kdb-quotes
-    ports: ["127.0.0.1:5003:5000"]
-    environment: {KDB_ROLE_USER: ro_quotes, KDB_USERS_FILE: /run/secrets/kdb_users.txt}
-    volumes:
-      - ${QLIC:?set QLIC to your licence dir}:/opt/kx/lic:ro
-      - ./init.q:/opt/app/init.q:ro
-      - ./users.txt:/run/secrets/kdb_users.txt:ro
-      - ./data/roles/quotes:/db:ro          # ONLY this role's table
-
-  # One-off job that writes the HDB and the role views (make kdb-hdb). Only this container can write to ./data.
+  # One-off job that writes the HDB (make kdb-hdb). Only this container can write to ./data.
   hdb-builder:
     image: kdb-ai-chat/kdbx
     profiles: ["tools"]
@@ -53,7 +29,7 @@ services:
       - ./data:/data
     command: ["q", "/opt/app/build_hdb.q", "-q"]
 
-  # Admin console on the whole HDB (make kdb-admin / make kdb-expected). Read-only, no network port.
+  # Admin console on the HDB (make kdb-admin / make kdb-expected). Read-only, no network port.
   kdb-admin:
     image: kdb-ai-chat/kdbx
     profiles: ["tools"]

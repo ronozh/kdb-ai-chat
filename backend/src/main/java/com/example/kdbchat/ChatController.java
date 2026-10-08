@@ -40,11 +40,11 @@ public class ChatController {
         }
         var caller = users.resolve(http);
         if (caller.isEmpty()) {
-            return error(HttpStatus.FORBIDDEN, "unknown user: no data role");
+            return error(HttpStatus.FORBIDDEN, "unknown user: no user group");
         }
         String sessionId = req.session_id() == null || req.session_id().isBlank()
                 ? UUID.randomUUID().toString() : req.session_id();
-        return ResponseEntity.ok(agent.chat(sessionId, caller.get().user(), caller.get().role(), req.question()));
+        return ResponseEntity.ok(agent.chat(sessionId, caller.get().user(), caller.get().group(), req.question()));
     }
 
     @GetMapping("/health")

@@ -54,8 +54,8 @@ public class AgentClient {
                 .connectTimeout(Duration.ofSeconds(5)).build();
     }
 
-    public JsonNode chat(String sessionId, String userId, String role, String question) {
-        Map<String, String> body = Map.of("session_id", sessionId, "user_id", userId, "role", role, "question", question);
+    public JsonNode chat(String sessionId, String userId, String group, String question) {
+        Map<String, String> body = Map.of("session_id", sessionId, "user_id", userId, "group", group, "question", question);
         return send(HttpRequest.newBuilder(URI.create(baseUrl + "/chat"))
                 .timeout(timeout)
                 .header("Content-Type", "application/json")

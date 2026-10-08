@@ -1,0 +1,5 @@
+# User group -> tables the group may query. Tomcat maps each web user to exactly one group.
+# The agent enforces this on every SQL tool call (agent/access.py). Restart the agent after editing.
+research: [daily_prices]
+trading: [trades, quotes]
+all: [daily_prices, trades, quotes]
