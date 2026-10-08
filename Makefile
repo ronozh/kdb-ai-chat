@@ -1,6 +1,5 @@
 SHELL := /bin/bash
 export QLIC ?= $(HOME)/qlic
-KDB_PW = $$(grep ^KDBX_DB_PASSWORD mcp-server/.env | cut -d= -f2)
 
 .PHONY: kdb kdb-user kdb-down kdb-logs kdb-test kdb-expected mcp mcp-check agent backend backend-down frontend test health
 
@@ -19,7 +18,7 @@ kdb-logs:
 
 kdb-test:            ## auth + read-only checks
 	docker cp kdb/test_security.q kdbx:/tmp/test_security.q
-	docker exec -e PW=$(KDB_PW) kdbx q /tmp/test_security.q -q
+	docker exec --env-file mcp-server/.env kdbx q /tmp/test_security.q -q
 
 mcp:                 ## KDB-X MCP server (pinned submodule, unmodified) on 127.0.0.1:8000
 	@[ -f mcp-server/kdb-x-mcp-server/pyproject.toml ] || git submodule update --init

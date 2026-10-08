@@ -1,5 +1,6 @@
 package com.example.kdbchat;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
@@ -67,6 +68,8 @@ public class AgentClient {
                 throw new AgentException("agent returned " + resp.statusCode() + ": " + resp.body(), null);
             }
             return mapper.readTree(resp.body());
+        } catch (JsonProcessingException e) {
+            throw new AgentException("agent returned invalid JSON: " + e.getOriginalMessage(), e);
         } catch (HttpTimeoutException e) {
             throw new AgentTimeoutException("agent did not respond within " + timeout.toSeconds() + "s", e);
         } catch (IOException e) {

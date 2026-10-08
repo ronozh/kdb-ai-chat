@@ -65,7 +65,7 @@ export default function App() {
             {USERS.map((u) => <option key={u}>{u}</option>)}
           </select>
         </label>
-        <button onClick={newConversation}>New conversation</button>
+        <button onClick={newConversation} disabled={loading}>New conversation</button>
       </header>
 
       <main className="messages">

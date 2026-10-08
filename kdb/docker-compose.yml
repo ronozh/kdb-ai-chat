@@ -12,6 +12,6 @@ services:
       - ./init.q:/opt/app/init.q:ro
       - ./gen_data.q:/opt/app/gen_data.q:ro
       - ./users.txt:/run/secrets/kdb_users.txt:ro
-    command: ["q", "init.q", "-p", "5000", "-T", "30"]   # -T: abort client queries after 30s
+    command: ["q", "init.q", "-T", "30", "-w", "2000"]   # -T: abort client queries after 30s; -w: 2GB cap (q aborts, Docker restarts)
     stdin_open: true   # q exits on stdin EOF
     restart: unless-stopped

@@ -1,6 +1,6 @@
-/ Security checks for milestone 1. Run: make kdb-test (needs env PW = mcp_ro password)
+/ Security checks for milestone 1. Run: make kdb-test (needs env KDBX_DB_PASSWORD)
 / Uses the exact call shape the KDB-X MCP server sends.
-pw:getenv`PW; fails:0;
+pw:getenv`KDBX_DB_PASSWORD; fails:0;
 chk:{[lbl;ok] -1 $[ok;"PASS ";"FAIL "],lbl; if[not ok;fails+:1]};
 err:{[f;x] @[f;x;{`err}]~`err};
 
@@ -28,7 +28,10 @@ chk["MCP tables listing works";`daily_prices in h"tables[]"];
 w:("INSERT INTO daily_prices VALUES ('2026-10-01','T001','x',1.0,1)";"DELETE FROM daily_prices";
    "UPDATE daily_prices SET close=0";"CREATE TABLE zz (a INT)";"DROP TABLE daily_prices";
    "SELECT 1; DROP TABLE daily_prices";"SELECT 1;;DROP TABLE daily_prices;";"SELECT 1 -- x";"SELECT /* x */ 1";"select 1 from daily_prices into zz";
-   " drop table daily_prices");
+   " drop table daily_prices";
+   "SELECT 1 AS \"a'\" ; DROP TABLE daily_prices ; SELECT 'b'";            / quote-mixing bypass
+   "SELECT 1 AS \"a'\", * INTO zz FROM daily_prices WHERE name <> 'x'";
+   "WITH x AS (SELECT 1 AS \"a'\") INSERT INTO daily_prices SELECT * FROM daily_prices WHERE 'z'='z'");
 {chk["SQL blocked: ",x;err[sql;x]]}each w;
 q:("daily_prices:0#daily_prices";"delete from `daily_prices";"`daily_prices insert first daily_prices";
    "zz:1";"system\"ls\"";"exit 0";"read0`:/run/secrets/kdb_users.txt";"read0`:/etc/hostname";
@@ -36,6 +39,9 @@ q:("daily_prices:0#daily_prices";"delete from `daily_prices";"`daily_prices inse
    (`.s.e;"DROP TABLE daily_prices");({.s.e x};"DROP TABLE daily_prices");
    ("{r:.s.e x;r}";"DROP TABLE daily_prices";1000));
 {chk["q blocked: ",-3!x;err[h;x]]}each q;
+chk["lambda row limit blocked";err[h;(sqlCall;"SELECT 1 FROM daily_prices";{system"ls";0})]];
+chk["creds not readable via .sec.creds";err[h;".sec.creds[]"]];
+chk["no hashes in .z.pw (plain lambda, not a projection)";100h=type h".z.pw"];
 chk["data unchanged";n0=h"count daily_prices"];
 chk["no new tables";(enlist`daily_prices)~h"tables[]"];
 

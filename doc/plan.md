@@ -108,7 +108,7 @@ kdb-ai-chat/
 
 **Agent**
 - `Agent(AGENT_MODEL, toolsets=[MCPServerStreamableHTTP(MCP_URL)])`
-- Open the MCP connection once in the FastAPI lifespan (`async with agent:`).
+- Each agent run opens its own MCP connection, so the agent survives MCP server restarts. The startup lifespan only loads the resources. (Changed from "open once in the lifespan": that connection never reconnected.)
 - At startup, read the MCP resources `kdbx_describe_tables` and the SQL guidance resource, and add them to the agent instructions. If that's not possible, add a hand-written schema of `daily_prices`.
 - Instructions must say:
   - Always query kdb for figures. Never estimate or calculate them by hand.

@@ -21,7 +21,7 @@ from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart  # no
 AGENT_MODEL = os.getenv("AGENT_MODEL", "google:gemini-3.5-flash")
 MCP_URL = os.getenv("MCP_URL", "http://127.0.0.1:8000/mcp")
 SQL_TOOL = "kdbx_run_sql_query"
-RETRY_DELAYS = (10, 20, 30)  # seconds; free-tier Gemini often returns 429/503
+RETRY_DELAYS = (5, 10)  # seconds; free-tier Gemini often returns 429/503. Keep well under Tomcat's 90s timeout.
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("agent")
@@ -71,12 +71,13 @@ async def load_mcp_context() -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    async with agent:  # one MCP connection for the app's lifetime
-        try:
+    # Each agent run opens its own MCP connection, so the agent recovers when the MCP server restarts.
+    try:
+        async with toolset:
             await load_mcp_context()
-        except Exception as e:  # keep the hand-written schema
-            log.warning("could not read MCP resources, using fallback schema: %s", e)
-        yield
+    except Exception as e:  # keep the hand-written schema
+        log.warning("could not read MCP resources, using fallback schema: %s", e)
+    yield
 
 
 app = FastAPI(title="kdb-ai-chat agent", lifespan=lifespan)
@@ -113,7 +114,8 @@ async def chat(req: ChatRequest) -> ChatResponse:
             result = await agent.run(req.question, message_history=sessions.get(req.session_id))
             break
         except ModelHTTPError as e:
-            if e.status_code not in (429, 503) or delay is None:
+            daily_quota = "PerDay" in str(e.body)  # retrying a daily quota is pointless
+            if e.status_code not in (429, 503) or daily_quota or delay is None:
                 log.exception("agent run failed")
                 raise HTTPException(status_code=502, detail=f"model error: {e}") from e
             log.warning("model returned %s, retrying in %ss", e.status_code, delay)
@@ -136,8 +138,9 @@ async def chat(req: ChatRequest) -> ChatResponse:
 @app.get("/health")
 async def health() -> dict:
     try:
-        resources = await toolset.list_resources()
-        mcp = {"ok": True, "resources": len(resources)}
+        async with toolset:
+            await toolset.read_resource("kdbx://tables")  # not cached: really reaches the MCP server and kdb
+        mcp = {"ok": True}
     except Exception as e:
         mcp = {"ok": False, "error": str(e)}
     return {"status": "ok" if mcp["ok"] else "degraded", "model": AGENT_MODEL, "mcp": mcp}

@@ -2,7 +2,7 @@
 
 You need two things before Phase 1 can run:
 
-1. A **KDB-X Community Edition licence** (`kc.lic`) plus your **KX download token**. The KDB-X Docker image and the MCP server (pykx) both need them.
+1. A **KDB-X Community Edition licence** (`kc.lic`). The KDB-X container and the MCP server (pykx) both need it.
 2. A **Gemini API key** for the agent (free tier).
 
 Neither costs money.
@@ -47,12 +47,6 @@ mkdir -p ~/qlic && chmod 700 ~/qlic
 #    (paste the key between the single quotes, exactly as given)
 echo '<LICENSE_KEY>' | base64 -d > ~/qlic/kc.lic
 
-# 2. Keep the base64 form too (the Docker build uses it)
-echo '<LICENSE_KEY>' > ~/qlic/kc.lic.b64
-
-# 3. Save the download token (the Docker build uses it as a build secret)
-echo '<AUTH_TOKEN>' > ~/qlic/kx-token
-
 chmod 600 ~/qlic/*
 ```
 
@@ -66,7 +60,7 @@ Check:
 
 ```bash
 echo $QLIC        # /Users/<you>/qlic
-ls -l ~/qlic      # kc.lic  kc.lic.b64  kx-token
+ls -l ~/qlic      # kc.lic
 ```
 
 How the project uses these files:
@@ -74,8 +68,8 @@ How the project uses these files:
 | File | Used by |
 |---|---|
 | `~/qlic/kc.lic` | Mounted read-only into the KDB-X container (`QLIC`). Also read by the MCP server's pykx on the host. |
-| `~/qlic/kc.lic.b64` | Docker build or install step |
-| `~/qlic/kx-token` | Docker build, passed as a `--secret` so it never ends up in an image layer |
+
+The Docker build downloads the KDB-X binaries without the token. If KX starts requiring it (HTTP 401 during `make kdb`), the download step in `kdb/Dockerfile` will need it.
 
 ### 1.4 (Optional) Quick check on the Mac
 
@@ -95,7 +89,6 @@ This step is optional, since the project doesn't need q on the host.
 
 - **`licence error` or `k4.lic` missing:** `QLIC` must point at the *directory* that holds `kc.lic`, not at the file itself.
 - **Base64 decode fails:** the key was probably reformatted when copied. Copy it again from the email or Developer Center as a single line.
-- **Download returns 401/403:** the bearer token has expired. Log in to the Developer Center again and copy a fresh one.
 
 ### References
 

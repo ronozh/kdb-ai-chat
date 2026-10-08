@@ -5,7 +5,7 @@ Natural-language chat over a KDB-X price database. Spec: `doc/plan.md`. Setup: `
 ## Prerequisites
 
 Docker Desktop, Node 20+, `uv`, and the KDB-X licence in `~/qlic` plus a Gemini key in `agent/.env` (see `doc/setup-licence-and-keys.md`).
-Java, Maven and Tomcat run in Docker.
+Java, Maven and Tomcat run in Docker. Tested on macOS with Docker Desktop. On Linux, Tomcat needs `extra_hosts: ["host.docker.internal:host-gateway"]` and the agent must listen on an address the container can reach.
 
 ## Run (in order, one terminal each for the foreground ones)
 
@@ -28,14 +28,14 @@ Tests: `make kdb-test` (security, no LLM). `make test` runs that plus the sectio
 - **MCP server: "valid q license must be in a known location"**: `QLIC` isn't set. `make` sets it to `~/qlic`.
 - **Port 8080 busy**: Tomcat is published on 8090 because 8080 is used by other local services.
 - **Tomcat 502 with an empty body at the agent**: the Java HttpClient must use HTTP/1.1. Its default h2c upgrade makes uvicorn drop the body.
-- **kdb queries**: `docker logs kdbx` shows every remote query (audit log). Client queries are aborted after 30s (`-T 30`).
+- **kdb queries**: `docker logs kdbx` shows every remote query (audit log). Client queries are aborted after 30s (`-T 30`). Memory is capped at 2 GB (`-w 2000`); a query that exceeds it kills q, and Docker restarts it.
 
 ## Security findings (KDB-X)
 
 - KX SQL (`.s.e`) writes an internal global (`.s.I`), so it fails under both `reval` and `-b`. The plan's fallback (`-b`) does not work, so `-b` is not used.
 - Unrestricted `.s.e` accepts `INSERT`, `CREATE TABLE` and `DROP TABLE`, but not `UPDATE`/`DELETE`, and it cannot call q functions.
 - Design (`kdb/init.q`):
-  - Every connection is authenticated against a salted SHA-1 credentials file. Anonymous and unknown users are rejected.
+  - Every connection is authenticated against a salted SHA-1 credentials file, re-read on each login. kdb fails closed: the port opens only at the end of `init.q`, and q exits if the file can't be read. Anonymous and unknown users are rejected.
   - The MCP server's exact SQL call runs `.s.e` directly, but only for a single `SELECT`/`WITH` statement: no `;`, no comments, no DML/DDL keywords outside string literals.
   - Every other remote query runs under `reval`, which blocks writes, `system` and file access outside the working dir. The credentials file is mounted outside the working dir.
   - pykx sends calls as ("fn-as-string";args). These are resolved inside `reval`, like the default handler does.
