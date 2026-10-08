@@ -1,0 +1,17 @@
+services:
+  kdbx:
+    build: .
+    image: kdb-ai-chat/kdbx
+    container_name: kdbx
+    ports:
+      - "127.0.0.1:5000:5000"
+    environment:
+      KDB_USERS_FILE: /run/secrets/kdb_users.txt
+    volumes:
+      - ${QLIC:?set QLIC to your licence dir}:/opt/kx/lic:ro
+      - ./init.q:/opt/app/init.q:ro
+      - ./gen_data.q:/opt/app/gen_data.q:ro
+      - ./users.txt:/run/secrets/kdb_users.txt:ro
+    command: ["q", "init.q", "-p", "5000"]
+    stdin_open: true   # q exits on stdin EOF
+    restart: unless-stopped

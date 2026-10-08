@@ -89,7 +89,7 @@ kdb-ai-chat/
 - Make `mcp_ro` read-only by evaluating its queries through `reval` in `.z.pg` / `.z.ps`.
 - Also start q with `-b` to block remote writes as defence in depth. Data loading runs at startup on handle 0, which `-b` does not affect.
 - Do not open an admin remote account in Phase 1.
-- Risk: confirm that `reval` works with the SQL interface (`.s.e`). If it doesn't, keep `-b` plus authentication and record the finding in the README.
+- Finding (milestone 1): `.s.e` fails under both `reval` and `-b`. Instead, the MCP SQL call runs `.s.e` behind a strict SELECT/WITH allowlist, everything else runs under `reval`, and `-b` is dropped. See the README.
 
 **Done when**
 - Connecting as `mcp_ro` and running a SQL SELECT returns rows.
