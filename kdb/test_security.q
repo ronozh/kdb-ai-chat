@@ -16,6 +16,7 @@ n0:h"count daily_prices";
 
 / reads
 chk["SQL SELECT returns rows";5=(sql"SELECT * FROM daily_prices LIMIT 5")`rowCount];
+chk["trailing semicolon ok";2=(sql"SELECT * FROM daily_prices LIMIT 2 ;\n")`rowCount];
 chk["SQL WITH works";1=(sql"WITH x AS (SELECT * FROM daily_prices) SELECT count(*) AS n FROM x")`rowCount];
 chk["string literal with keyword ok";0=(sql"SELECT * FROM daily_prices WHERE name = 'DROP; delete'")`rowCount];
 chk["q read works";n0=26100];
@@ -26,7 +27,7 @@ chk["MCP tables listing works";`daily_prices in h"tables[]"];
 / writes and escapes: all must fail
 w:("INSERT INTO daily_prices VALUES ('2026-10-01','T001','x',1.0,1)";"DELETE FROM daily_prices";
    "UPDATE daily_prices SET close=0";"CREATE TABLE zz (a INT)";"DROP TABLE daily_prices";
-   "SELECT 1; DROP TABLE daily_prices";"SELECT 1 -- x";"SELECT /* x */ 1";"select 1 from daily_prices into zz";
+   "SELECT 1; DROP TABLE daily_prices";"SELECT 1;;DROP TABLE daily_prices;";"SELECT 1 -- x";"SELECT /* x */ 1";"select 1 from daily_prices into zz";
    " drop table daily_prices");
 {chk["SQL blocked: ",x;err[sql;x]]}each w;
 q:("daily_prices:0#daily_prices";"delete from `daily_prices";"`daily_prices insert first daily_prices";

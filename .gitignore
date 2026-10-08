@@ -22,3 +22,7 @@ dist/
 .DS_Store
 .idea/
 .vscode/
+
+# MCP server
+mcp-server/.venv/
+mcp-server/*.log

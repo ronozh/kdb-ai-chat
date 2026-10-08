@@ -23,10 +23,15 @@
   $[not first[w] in ("SELECT";"WITH");0b;
     any w in ("INSERT";"UPDATE";"DELETE";"CREATE";"DROP";"ALTER";"TRUNCATE";"INTO";"MERGE";"REPLACE";"UPSERT";"GRANT");0b;
     1b]};
-.sec.sql:{[q;n] if[not .sec.readOnly q;'"read-only: only a single SELECT/WITH statement is allowed"];
+.sec.trim:{[q] $[10h<>type q;q;{(neg sum mins reverse x in " \t\r\n;")_x}trim q]};   / drop trailing ;
+.sec.sql:{[q;n] q:.sec.trim q; if[not .sec.readOnly q;'"read-only: only a single SELECT/WITH statement is allowed"];
   r:.s.e q; `rowCount`data!(count r;.j.j n sublist r)};
-.z.pg:{$[.sec.isSqlCall x;.sec.sql . 1_x;reval(value;x)]};
-.z.ps:{reval(value;x)};
+/ audit log: one line per remote query
+.sec.log:{[k;x] -1 " "sv(string .z.p;string .z.u;k;.Q.s1 x);};
+/ like the default handler: a ("fn-as-string";args..) call resolves the string first, all inside reval
+.sec.app:{$[(0h=type x)&10h=type first x;(value first x). 1_x;value x]};
+.z.pg:{.sec.log["sync";x]; $[.sec.isSqlCall x;.sec.sql . 1_x;reval(.sec.app;enlist x)]};
+.z.ps:{.sec.log["async";x]; reval(.sec.app;enlist x)};
 
 / no HTTP or websocket query paths
 .z.ph:{.h.hn["403 Forbidden";`txt;"forbidden"]};
