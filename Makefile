@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 export QLIC ?= $(HOME)/qlic
 
-.PHONY: kdb kdb-hdb kdb-users kdb-down kdb-admin kdb-test kdb-expected mcp mcp-stop mcp-check secrets agent backend backend-down frontend test test-llm health
+.PHONY: clean-ds kdb kdb-hdb kdb-users kdb-down kdb-admin kdb-test kdb-expected mcp mcp-stop mcp-check secrets agent backend backend-down frontend test test-llm health
 
 ROLES := prices trades quotes
 
@@ -13,7 +13,11 @@ kdb-hdb:             ## write the HDB + role views to kdb/data (once; delete kdb
 	docker compose -f kdb/docker-compose.yml build kdb-prices
 	docker compose -f kdb/docker-compose.yml run --rm hdb-builder
 
-kdb:                 ## start the 3 role q processes on 127.0.0.1:5001-5003 (first run: users + HDB)
+# macOS Finder drops .DS_Store files into folders you browse; q's HDB loader fails on them
+clean-ds:
+	@find kdb/data -name .DS_Store -delete 2>/dev/null || true
+
+kdb: clean-ds        ## start the 3 role q processes on 127.0.0.1:5001-5003 (first run: users + HDB)
 	@[ -f kdb/users.txt ] || $(MAKE) kdb-users
 	@[ -d kdb/data/hdb ] || $(MAKE) kdb-hdb
 	docker compose -f kdb/docker-compose.yml up -d --build --remove-orphans kdb-prices kdb-trades kdb-quotes
@@ -21,13 +25,13 @@ kdb:                 ## start the 3 role q processes on 127.0.0.1:5001-5003 (fir
 kdb-down:
 	docker compose -f kdb/docker-compose.yml down
 
-kdb-admin:           ## admin q console on the WHOLE HDB (read-only mount, no network port)
+kdb-admin: clean-ds  ## admin q console on the WHOLE HDB (read-only mount, no network port)
 	docker compose -f kdb/docker-compose.yml run --rm kdb-admin q /hdb
 
 kdb-test:            ## per role: auth, read-only, and can only see its own table
 	kdb/test.sh
 
-kdb-expected:        ## expected answers for the e2e tests (computed in q on the whole HDB)
+kdb-expected: clean-ds ## expected answers for the e2e tests (computed in q on the whole HDB)
 	docker compose -f kdb/docker-compose.yml run --rm -T kdb-admin q /opt/app/expected.q -q
 
 mcp:                 ## start one KDB-X MCP server per role (pinned submodule, unmodified) on 127.0.0.1:8101-8103
